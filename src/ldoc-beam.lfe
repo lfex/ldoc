@@ -19,7 +19,7 @@
           (tuple 'error (tuple 'read_sidecar (term)))
           (tuple 'error
                  (UNION 'invalid_beam 'missing_docs 'invalid_docs
-                        'invalid_sidecar_association)))))
+                        'invalid_ldoc 'invalid_sidecar_association)))))
 
 (defspec (collect 2)
   ([(UNION (nonempty_string) (binary))
@@ -30,12 +30,13 @@
           (tuple 'error
                  (UNION 'invalid_beam 'missing_docs 'invalid_docs
                         'invalid_sidecar_association
+                        'invalid_ldoc
                         'invalid_edoc_provenance)))))
 
 (defun read-docs (path)
   "Read embedded Docs metadata from a trusted local BEAM file."
   (case (read-artifact path)
-    (`#(missing ,_module)
+    (`#(missing ,_module ,_beam)
      '#(error missing_docs))
     (result result)))
 
@@ -77,8 +78,11 @@
 
 (defun collect-artifact (path conversion)
   (case (read-artifact path)
-    (`#(missing ,module)
-     (collect-sidecar path module conversion))
+    (`#(missing ,module ,beam)
+     (case (collect-sidecar path module conversion)
+       (`#(error missing_docs)
+        (read-legacy path module beam))
+       (result result)))
     (result result)))
 
 (defun read-artifact (path)
@@ -89,11 +93,11 @@
      `#(error #(read_beam ,reason)))))
 
 (defun read-beam (path beam)
-  (case (read-beam-chunks beam)
+  (case (read-beam-chunks beam '("Docs"))
     (`#(ok #(,module ,chunks))
      (case (lists:keyfind "Docs" 1 chunks)
        (`#("Docs" missing_chunk)
-        `#(missing ,module))
+        `#(missing ,module ,beam))
        (`#("Docs" ,docs-bytes)
         (ldoc-eep48:decode
          module
@@ -104,9 +108,9 @@
     (`#(error invalid_beam)
      '#(error invalid_beam))))
 
-(defun read-beam-chunks (beam)
+(defun read-beam-chunks (beam chunks)
   (try
-    (beam_lib:chunks beam '("Docs") '(allow_missing_chunks))
+    (beam_lib:chunks beam chunks '(allow_missing_chunks))
     (catch
       (`#(error #(badmatch #(EXIT #(function_clause ,_))) ,_)
        '#(error invalid_beam))
@@ -116,6 +120,28 @@
        '#(error invalid_beam))
       (`#(error #(badmatch #(EXIT #(badmatch ,_))) ,_)
        '#(error invalid_beam)))))
+
+(defun read-legacy (path original-module beam)
+  (case (read-beam-chunks beam '("LDoc"))
+    (`#(ok #(,scanned-module ,chunks))
+     (if (=:= scanned-module original-module)
+         (case (lists:keyfind "LDoc" 1 chunks)
+           (`#("LDoc" missing_chunk)
+            '#(error missing_docs))
+           (`#("LDoc" ,legacy-bytes)
+            (ldoc-legacy:decode
+             original-module
+             `#m(carrier embedded_beam
+                 path ,path
+                 chunk #b("LDoc")
+                 legacy_version lfe_docs_v1
+                 format_policy lodox_markdown)
+             legacy-bytes)))
+         '#(error invalid_beam)))
+    (`#(error beam_lib ,_)
+     '#(error invalid_beam))
+    (`#(error invalid_beam)
+     '#(error invalid_beam))))
 
 (defun collect-sidecar (path module conversion)
   (case (sidecar-paths path module)

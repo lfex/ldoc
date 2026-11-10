@@ -45,7 +45,15 @@ run(Temp) ->
     erl_s01_collect(LfePath, ErlPath),
     Classic = erl_s02(Temp),
     erl_s03_collect(Temp, Classic),
-    erl_s04_collect(Temp, LfeBeam).
+    erl_s04_collect(Temp, LfeBeam),
+    LegacyFixture = filename:join([SourceDir, "fixtures",
+                                  "ldoc-legacy.beam.fixture"]),
+    LegacyBeamPath = filename:join(Temp, "ldoc-legacy.beam"),
+    {ok, _} = file:copy(LegacyFixture, LegacyBeamPath),
+    {ok, LegacyBeam} = file:read_file(LegacyBeamPath),
+    ldo_s01(LegacyBeamPath),
+    ldo_s02(Temp, LegacyBeam),
+    ldo_s03_collect(Temp, LfePath, ErlPath, Classic, LegacyBeam).
 
 eep_s01(LfePath) ->
     ?assert(filelib:is_regular(code:which('ldoc-beam'))),
@@ -387,7 +395,7 @@ erl_s02(Temp) ->
     #{beam_path => BeamPath, chunk_path => ChunkPath,
       chunk_bytes => ChunkBytes,
       source_path => SourcePath, include_dir => IncludeDir,
-      module_beam => Beam}.
+      module_beam => Beam, module => Plain}.
 
 package_dirs(Temp, Name) ->
     Root = filename:join(Temp, Name),
@@ -551,6 +559,230 @@ erl_s04_collect(Temp, LfeBeam) ->
                             "ldoc-fixture.beam", MissingBeam),
     ?assertEqual({error, missing_docs}, 'ldoc-beam':collect(AbsentBeam)).
 
+ldo_s01(LegacyPath) ->
+    ?assertEqual({error, missing_docs}, 'ldoc-beam':'read-docs'(LegacyPath)),
+    {ok, Module} = 'ldoc-beam':collect(LegacyPath),
+    ?assertEqual(#{carrier => embedded_beam,
+                   path => LegacyPath,
+                   chunk => <<"LDoc">>,
+                   legacy_version => lfe_docs_v1,
+                   format_policy => lodox_markdown},
+                 maps:get(source, Module)),
+    ?assertEqual(<<"ldoc-legacy">>, maps:get(name, Module)),
+    ?assertEqual(<<"lfe">>, maps:get(language, Module)),
+    ?assertEqual(<<"text/markdown">>, maps:get(format, Module)),
+    ?assertEqual(undefined, maps:get(annotation, Module)),
+    ?assertEqual(#{<<"und">> =>
+                   <<"Classic module.\n\nSecond paragraph.">>},
+                 maps:get(doc, Module)),
+    ?assertEqual(#{legacy_doc_lines =>
+                   [<<"Classic module.">>, <<>>, <<"Second paragraph.">>]},
+                 maps:get(metadata, Module)),
+    Entries = maps:get(entries, Module),
+    ?assertEqual(
+       [{<<"function">>, <<"bare">>, 0},
+        {<<"function">>, <<"shape">>, 1},
+        {<<"function">>, <<"shape">>, 2},
+        {<<"macro">>, <<"direct">>, unknown},
+        {<<"macro">>, <<"show">>, unknown}],
+       entry_keys(Entries)),
+    ?assertEqual(false,
+                 lists:any(fun(E) -> maps:get(name, E) =:= <<"private-helper">> end,
+                           Entries)),
+    assert_legacy_entry(Entries, <<"function">>, <<"bare">>, 0, 17,
+                        [{[], []}], none, []),
+    assert_legacy_entry(Entries, <<"function">>, <<"shape">>, 1, 8,
+                        [{[x], [[is_integer, x]]}, {[x], []}],
+                        #{<<"und">> => <<"One classic argument.">>},
+                        [<<"One classic argument.">>]),
+    assert_legacy_entry(Entries, <<"function">>, <<"shape">>, 2, 13,
+                        [{[x, y], []}],
+                        #{<<"und">> => <<"Two classic arguments.">>},
+                        [<<"Two classic arguments.">>]),
+    assert_legacy_entry(Entries, <<"macro">>, <<"direct">>, unknown, 26,
+                        [args], #{<<"und">> => <<"Classic direct macro.">>},
+                        [<<"Classic direct macro.">>]),
+    assert_legacy_entry(Entries, <<"macro">>, <<"show">>, unknown, 21,
+                        [{[x], [[is_atom, x]]}, {[x], []}],
+                        #{<<"und">> => <<"Classic guarded macro.">>},
+                        [<<"Classic guarded macro.">>]).
+
+ldo_s02(Temp, LegacyBeam) ->
+    {ok, {_, [{"LDoc", LegacyBytes}]}} = beam_lib:chunks(LegacyBeam, ["LDoc"]),
+    LegacyTerm = binary_to_term(LegacyBytes),
+    Corrupt = write_beam(Temp, "legacy-corrupt.beam",
+                         replace_chunk(LegacyBeam, "LDoc", <<1, 2, 3>>)),
+    ?assertEqual({error, invalid_ldoc}, 'ldoc-beam':collect(Corrupt)),
+    TrailingBytes = <<LegacyBytes/binary, 0>>,
+    Trailing = write_beam(Temp, "legacy-trailing.beam",
+                          replace_chunk(LegacyBeam, "LDoc", TrailingBytes)),
+    ?assertEqual({error, invalid_ldoc}, 'ldoc-beam':collect(Trailing)),
+    WrongVersion = write_beam(
+                     Temp, "legacy-wrong-version.beam",
+                     replace_chunk(LegacyBeam, "LDoc",
+                                   term_to_binary(setelement(1, LegacyTerm,
+                                                             not_lfe_docs_v1)))),
+    ?assertEqual({error, invalid_ldoc}, 'ldoc-beam':collect(WrongVersion)),
+    [First | Rest] = element(2, LegacyTerm),
+    MalformedEntry = write_beam(
+                       Temp, "legacy-malformed-entry.beam",
+                       replace_chunk(LegacyBeam, "LDoc",
+                                     term_to_binary(setelement(
+                                                      2, LegacyTerm,
+                                                      [malformed | Rest])))),
+    ?assertEqual({error, invalid_ldoc}, 'ldoc-beam':collect(MalformedEntry)),
+    BadArity = list_to_tuple(lists:sublist(tuple_to_list(First), 6)),
+    BadArityPath = write_beam(
+                     Temp, "legacy-bad-entry-arity.beam",
+                     replace_chunk(LegacyBeam, "LDoc",
+                                   term_to_binary(setelement(
+                                                    2, LegacyTerm,
+                                                    [BadArity | Rest])))),
+    ?assertEqual({error, invalid_ldoc}, 'ldoc-beam':collect(BadArityPath)),
+    Duplicate = write_beam(
+                  Temp, "legacy-duplicate.beam",
+                  replace_chunk(LegacyBeam, "LDoc",
+                                term_to_binary(setelement(2, LegacyTerm,
+                                                          [First, First])))),
+    ?assertEqual({error, invalid_ldoc}, 'ldoc-beam':collect(Duplicate)),
+    Removed = write_beam(Temp, "legacy-removed.beam",
+                         remove_chunk(LegacyBeam, "LDoc")),
+    ?assertEqual({error, missing_docs}, 'ldoc-beam':collect(Removed)).
+
+ldo_s03_collect(Temp, LfePath, ErlPath, Classic, LegacyBeam) ->
+    LegacyPath = write_beam(Temp, "legacy-projection.beam", LegacyBeam),
+    {ok, Lfe} = 'ldoc-beam':collect(LfePath),
+    {ok, Erlang} = 'ldoc-beam':collect(ErlPath),
+    EDoc = maps:get(module, Classic),
+    {ok, Legacy} = 'ldoc-beam':collect(LegacyPath),
+    ?assertEqual(
+       #{carrier => embedded_beam,
+         name => <<"ldoc-fixture">>, language => <<"lfe">>,
+         entries => [
+          {{<<"function">>, <<"LFE-EXPAND-EXPORTED-MACRO">>, 3}, none, internal},
+          {{<<"function">>, <<"bare">>, 0}, none, candidate},
+          {{<<"function">>, <<"sample">>, 1},
+           #{<<"en">> => <<"One argument.">>}, candidate},
+          {{<<"function">>, <<"sample">>, 2},
+           #{<<"en">> => <<"Two arguments.">>}, candidate},
+          {{<<"macro">>, <<"show">>, 1},
+           #{<<"en">> => <<"Display one argument.">>}, candidate}]},
+       consumer_projection(Lfe)),
+    ?assertEqual(
+       #{carrier => embedded_beam,
+         name => <<"ldoc_modern">>, language => <<"erlang">>,
+         entries => [
+          {{<<"callback">>, <<"get">>, 0},
+           #{<<"en">> => <<"Get a value.">>}, candidate},
+          {{<<"function">>, <<"hidden">>, 0}, hidden, candidate},
+          {{<<"function">>, <<"show">>, 1},
+           #{<<"en">> => <<"Show one value.">>}, candidate},
+          {{<<"type">>, <<"value">>, 0},
+           #{<<"en">> => <<"A fixture value type.">>}, candidate}]},
+       consumer_projection(Erlang)),
+    ?assertEqual(
+       #{carrier => eep48_sidecar,
+         name => <<"ldoc_classic">>, language => <<"erlang">>,
+         entries => [
+          {{<<"function">>, <<"show">>, 1},
+           #{<<"en">> => [{p, [], [<<"Show the input.">>]}]}, candidate}]},
+       consumer_projection(EDoc)),
+    ?assertEqual(
+       #{carrier => embedded_beam,
+         name => <<"ldoc-legacy">>, language => <<"lfe">>,
+         entries => [
+          {{<<"function">>, <<"bare">>, 0}, none, candidate},
+          {{<<"function">>, <<"shape">>, 1},
+           #{<<"und">> => <<"One classic argument.">>}, candidate},
+          {{<<"function">>, <<"shape">>, 2},
+           #{<<"und">> => <<"Two classic arguments.">>}, candidate},
+          {{<<"macro">>, <<"direct">>, unknown},
+           #{<<"und">> => <<"Classic direct macro.">>}, candidate},
+          {{<<"macro">>, <<"show">>, unknown},
+           #{<<"und">> => <<"Classic guarded macro.">>}, candidate}]},
+       consumer_projection(Legacy)),
+    ?assertEqual(#{carrier => embedded_beam,
+                   path => LegacyPath, chunk => <<"LDoc">>,
+                   legacy_version => lfe_docs_v1,
+                   format_policy => lodox_markdown}, maps:get(source, Legacy)),
+
+    Package = package_dirs(Temp, "legacy-composition"),
+    Ebin = maps:get(ebin, Package),
+    Chunks = maps:get(chunks, Package),
+    {ok, LfeBeam} = file:read_file(LfePath),
+    DocsTerm = docs_term(LfeBeam),
+    EmbeddedBytes = term_to_binary(
+                      setelement(5, DocsTerm,
+                                 #{<<"en">> => <<"Embedded docs win.">>})),
+    EmbeddedBeam = replace_chunk(LegacyBeam, "Docs", EmbeddedBytes),
+    EmbeddedPath = write_beam(Ebin, "ldoc-legacy.beam", EmbeddedBeam),
+    SidecarBytes = classic_sidecar(
+                     maps:get(chunk_bytes, Classic),
+                     #{<<"en">> => [{p, [], [<<"Sidecar wins.">>]}]}),
+    _ = write_beam(Chunks, "ldoc-legacy.chunk", SidecarBytes),
+    {ok, EmbeddedResult} = 'ldoc-beam':collect(EmbeddedPath),
+    ?assertEqual(#{<<"en">> => <<"Embedded docs win.">>},
+                 maps:get(doc, EmbeddedResult)),
+    ?assertEqual(embedded_beam,
+                 maps:get(carrier, maps:get(source, EmbeddedResult))),
+    HiddenPath = write_beam(
+                   Ebin, "hidden.beam",
+                   replace_chunk(LegacyBeam, "Docs",
+                                 term_to_binary(setelement(5, DocsTerm, hidden)))),
+    {ok, HiddenResult} = 'ldoc-beam':collect(HiddenPath),
+    ?assertEqual(hidden, maps:get(doc, HiddenResult)),
+    BadEmbeddedPath = write_beam(
+                        Ebin, "bad-embedded.beam",
+                        replace_chunk(LegacyBeam, "Docs", <<1, 2, 3>>)),
+    ?assertEqual({error, invalid_docs}, 'ldoc-beam':collect(BadEmbeddedPath)),
+
+    NoDocsPath = write_beam(Ebin, "ldoc-legacy.beam", LegacyBeam),
+    {ok, SidecarResult} = 'ldoc-beam':collect(NoDocsPath),
+    ?assertEqual(#{<<"en">> => [{p, [], [<<"Sidecar wins.">>]}]},
+                 maps:get(doc, SidecarResult)),
+    ?assertEqual(eep48_sidecar,
+                 maps:get(carrier, maps:get(source, SidecarResult))),
+    CorruptSidecarPackage = package_dirs(Temp, "legacy-corrupt-sidecar"),
+    CorruptSidecarBeam = write_beam(maps:get(ebin, CorruptSidecarPackage),
+                                    "ldoc-legacy.beam", LegacyBeam),
+    _ = write_beam(maps:get(chunks, CorruptSidecarPackage),
+                   "ldoc-legacy.chunk", <<1, 2, 3>>),
+    ?assertEqual({error, invalid_docs},
+                 'ldoc-beam':collect(CorruptSidecarBeam)),
+    UnreadablePackage = package_dirs(Temp, "legacy-unreadable-sidecar"),
+    UnreadableBeam = write_beam(maps:get(ebin, UnreadablePackage),
+                                "ldoc-legacy.beam", LegacyBeam),
+    UnreadableSidecar = filename:join(maps:get(chunks, UnreadablePackage),
+                                      "ldoc-legacy.chunk"),
+    ok = file:make_dir(UnreadableSidecar),
+    {error, UnreadableReason} = file:read_file(UnreadableSidecar),
+    ?assertEqual({error, {read_sidecar, UnreadableReason}},
+                 'ldoc-beam':collect(UnreadableBeam)),
+    DecoyPackage = package_dirs(Temp, "legacy-decoy-sidecar"),
+    DecoySidecar = write_beam(maps:get(chunks, DecoyPackage),
+                              "ldoc-legacy.chunk", SidecarBytes),
+    RedirectPackage = package_dirs(Temp, "legacy-redirected-sidecar"),
+    RedirectBeam = write_beam(maps:get(ebin, RedirectPackage),
+                              "ldoc-legacy.beam", LegacyBeam),
+    RedirectPath = filename:join(maps:get(chunks, RedirectPackage),
+                                 "ldoc-legacy.chunk"),
+    ok = file:make_symlink(DecoySidecar, RedirectPath),
+    ?assertEqual({error, invalid_sidecar_association},
+                 'ldoc-beam':collect(RedirectBeam)),
+    AbsentPackage = package_dirs(Temp, "legacy-absent-sidecar"),
+    AbsentBeam = write_beam(maps:get(ebin, AbsentPackage),
+                            "ldoc-legacy.beam", LegacyBeam),
+    {ok, LegacyResult} = 'ldoc-beam':collect(AbsentBeam),
+    ?assertEqual(consumer_projection(Legacy),
+                 consumer_projection(LegacyResult)),
+    ?assertEqual(lfe_docs_v1,
+                 maps:get(legacy_version, maps:get(source, LegacyResult))),
+    NoDocsNoLegacy = remove_chunk(LegacyBeam, "LDoc"),
+    AbsentAllPackage = package_dirs(Temp, "legacy-absent-all"),
+    AbsentAllBeam = write_beam(maps:get(ebin, AbsentAllPackage),
+                               "ldoc-legacy.beam", NoDocsNoLegacy),
+    ?assertEqual({error, missing_docs}, 'ldoc-beam':collect(AbsentAllBeam)).
+
 classic_sidecar(ChunkBytes, ModuleDoc) ->
     Term = binary_to_term(ChunkBytes),
     term_to_binary(setelement(5, Term, ModuleDoc)).
@@ -568,6 +800,17 @@ assert_entry(Entries, Kind, Name, Arity, Line, Signatures, Doc, Visibility) ->
     ?assertEqual(Doc, maps:get(doc, Entry)),
     ?assertEqual(Visibility, maps:get(visibility, Entry)),
     ?assert(is_map(maps:get(metadata, Entry))).
+
+assert_legacy_entry(Entries, Kind, Name, Arity, Line, Patterns, Doc,
+                    DocLines) ->
+    Entry = entry(Entries, Kind, Name, Arity),
+    ?assertEqual(Line, erl_anno:line(maps:get(annotation, Entry))),
+    ?assertEqual([], maps:get(signatures, Entry)),
+    ?assertEqual(Patterns, maps:get(patterns, Entry)),
+    ?assertEqual(Doc, maps:get(doc, Entry)),
+    ?assertEqual(candidate, maps:get(visibility, Entry)),
+    ?assertEqual(#{legacy_doc_lines => DocLines, legacy_exported => true},
+                 maps:get(metadata, Entry)).
 
 entry(Entries, Kind, Name, Arity) ->
     [Entry] = [E || E <- Entries,
@@ -606,9 +849,13 @@ replace_format_and_doc(Beam, Format, Identity, Doc) ->
     replace_docs(Beam, term_to_binary(setelement(4, WithDocs, Format))).
 
 replace_docs(Beam, DocsBytes) ->
+    replace_chunk(Beam, "Docs", DocsBytes).
+
+replace_chunk(Beam, Name, ChunkBytes) ->
     {ok, _, Chunks} = beam_lib:all_chunks(Beam),
-    WithoutDocs = [Chunk || Chunk = {Name, _} <- Chunks, Name =/= "Docs"],
-    {ok, NewBeam} = beam_lib:build_module([{"Docs", DocsBytes} | WithoutDocs]),
+    WithoutChunk = [Chunk || Chunk = {ChunkName, _} <- Chunks,
+                             ChunkName =/= Name],
+    {ok, NewBeam} = beam_lib:build_module([{Name, ChunkBytes} | WithoutChunk]),
     NewBeam.
 
 remove_chunk(Beam, Name) ->

@@ -9,21 +9,10 @@
    (UNION (tuple 'ok (map)) (tuple 'error 'invalid_docs))))
 
 (defun decode (module source chunk-bytes)
-  (case (decode-term chunk-bytes)
+  (case (ldoc-etf:decode chunk-bytes)
     (`#(ok ,term)
      (normalize module source term))
     (_ '#(error invalid_docs))))
-
-(defun decode-term (bytes)
-  (try
-    (case (erlang:binary_to_term bytes '(used))
-      (`#(,term ,used)
-       (if (=:= used (byte_size bytes))
-           `#(ok ,term)
-           '#(error trailing_bytes))))
-    (catch
-      (`#(error badarg ,_)
-       '#(error badarg)))))
 
 (defun normalize (module source term)
   (case term

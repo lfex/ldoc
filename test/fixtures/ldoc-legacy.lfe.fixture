@@ -1,0 +1,28 @@
+(defmodule ldoc-legacy
+  "Classic module.
+
+   Second paragraph."
+  (export (shape 1) (shape 2) (bare 0))
+  (export-macro show direct))
+
+(defun shape
+  "One classic argument."
+  ((x) (when (is_integer x)) x)
+  ((x) x))
+
+(defun shape (x y)
+  "Two classic arguments."
+  (tuple x y))
+
+(defun bare () 'ok)
+
+(defun private-helper () 'private)
+
+(defmacro show
+  "Classic guarded macro."
+  ((x) (when (is_atom x)) (list 'quote x))
+  ((x) (list 'quote x)))
+
+(define-macro direct
+  ((doc "Classic direct macro."))
+  (lambda (args env) (list 'quote args)))
