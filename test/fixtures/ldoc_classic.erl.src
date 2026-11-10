@@ -1,0 +1,7 @@
+%% @doc A module documented with EDoc.
+-module(ldoc_classic).
+-export([show/1]).
+-include("ldoc_classic.hrl").
+%% @doc Show the input.
+-spec show(?VALUE_TYPE) -> ?VALUE_TYPE.
+show(X) -> X.
