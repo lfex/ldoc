@@ -28,7 +28,7 @@
 (defun normalize (module source term)
   (case term
     (`#(docs_v1 ,annotation ,language ,format ,module-doc ,metadata ,docs)
-     (if (and (is_atom module)
+     (if (andalso (is_atom module)
               (valid-annotation? annotation)
               (is_atom language)
               (valid-format? format)
@@ -52,10 +52,10 @@
     (_ '#(error invalid_docs))))
 
 (defun valid-format? (format)
-  (and (is_binary format) (> (byte_size format) 0)))
+  (andalso (is_binary format) (> (byte_size format) 0)))
 
 (defun valid-metadata? (metadata)
-  (and (is_map metadata)
+  (andalso (is_map metadata)
        (valid-metadata-keys? (maps:keys metadata))))
 
 (defun valid-metadata-keys? (keys)

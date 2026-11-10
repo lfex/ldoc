@@ -179,6 +179,38 @@ eep_s04(Temp, LfeBeam) ->
                                                               [BadMetadata | Rest])))),
     ?assertEqual({error, invalid_docs},
                  'ldoc-beam':'read-docs'(BadMetadataPath)),
+    BadFormatTerm = setelement(4, ValidTerm, not_binary),
+    BadFormatPath = write_beam(
+                      Temp, "invalid-format-type.beam",
+                      replace_docs(LfeBeam, term_to_binary(BadFormatTerm))),
+    ?assertEqual({error, invalid_docs},
+                 'ldoc-beam':'read-docs'(BadFormatPath)),
+    BadFormatStructuredTerm = setelement(
+                                5,
+                                setelement(4, ValidTerm, not_binary),
+                                #{<<"en">> => [{p, [], [<<"Example">>]}]}),
+    BadFormatStructuredPath = write_beam(
+                                Temp, "invalid-format-structured-doc.beam",
+                                replace_docs(LfeBeam,
+                                             term_to_binary(BadFormatStructuredTerm))),
+    ?assertEqual({error, invalid_docs},
+                 'ldoc-beam':'read-docs'(BadFormatStructuredPath)),
+    BadModuleMetadataTerm = setelement(6, ValidTerm, not_a_map),
+    BadModuleMetadataPath = write_beam(
+                              Temp, "invalid-module-metadata.beam",
+                              replace_docs(LfeBeam,
+                                           term_to_binary(BadModuleMetadataTerm))),
+    ?assertEqual({error, invalid_docs},
+                 'ldoc-beam':'read-docs'(BadModuleMetadataPath)),
+    BadEntryMetadata = setelement(5, First, not_a_map),
+    BadEntryMetadataPath = write_beam(
+                             Temp, "invalid-entry-metadata.beam",
+                             replace_docs(LfeBeam,
+                                          term_to_binary(setelement(
+                                                           7, ValidTerm,
+                                                           [BadEntryMetadata | Rest])))),
+    ?assertEqual({error, invalid_docs},
+                 'ldoc-beam':'read-docs'(BadEntryMetadataPath)),
     {ok, BadAtomBeam} = beam_lib:build_module([{ "AtU8", <<>>}]),
     BadAtomPath = write_beam(Temp, "invalid-atoms.beam", BadAtomBeam),
     ?assertEqual({error, invalid_beam},
