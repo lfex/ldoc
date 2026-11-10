@@ -1,0 +1,7 @@
+{application, ldoc,
+ [{description, "Library for reading BEAM documentation chunks"},
+  {vsn, "0.1.0-dev"},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, ['ldoc-beam', 'ldoc-eep48']}]}.

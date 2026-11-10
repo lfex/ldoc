@@ -1,0 +1,17 @@
+-module(ldoc_modern).
+-moduledoc(<<"Modern docs fixture.">>).
+
+-export([show/1, hidden/0]).
+-export_type([value/0]).
+
+-doc(<<"A fixture value type.">>).
+-type value() :: term().
+
+-doc(<<"Get a value.">>).
+-callback get() -> value().
+
+-doc(<<"Show one value.">>).
+show(Value) -> Value.
+
+-doc(false).
+hidden() -> hidden.
