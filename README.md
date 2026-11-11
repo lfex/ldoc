@@ -9,6 +9,41 @@ LDOC collects API documentation for Erlang, modern LFE, and classic LFE from tru
 'ldoc-beam':collect("_build/default/lib/my_app/ebin/my_module.beam").
 ```
 
+## Store exact release snapshots
+
+Assemble the complete native docset, then save and retrieve it by the exact
+release key. The store writes a readable, versioned LFE data form under a
+bounded SHA-256 filename; it does not infer aliases or order versions.
+
+```erlang
+Release = #{namespace => <<"local">>, package => <<"my_app">>,
+            version => <<"1.2.0">>},
+Inputs = ["_build/default/lib/my_app/ebin/my_module.beam"],
+{ok, Docset} = 'ldoc-docset':assemble(Release, Inputs),
+ok = 'ldoc-store':put("/var/tmp/ldoc-snapshots", Docset),
+{ok, Docset} = 'ldoc-store':get("/var/tmp/ldoc-snapshots", Release).
+```
+
+An identical retry returns `ok` without rewriting the snapshot. A different
+docset under the same exact release key returns
+`{error, {release_conflict, Release}}`, leaving the existing release data
+unchanged. Different version keys coexist and remain independently
+retrievable. Snapshots retain their complete producer maps as native LFE
+terms, including metadata, provenance and structured documentation.
+
+The caller chooses a trusted local store directory on a filesystem that
+supports exclusive file creation and same-directory hard links. The hard-link
+insertion is the immutable publication point. This protects concurrent writers
+and process interruption on a live filesystem; power-loss durability depends
+on additional guarantees from the filesystem and operating system.
+
+The readable data subset follows LFE's stock literal writers: comments and
+whitespace, direct literal binary strings, byte values, and an optional final
+partial-byte size segment are supported. Reader-eval forms (`#.`) and computed
+binary expressions are invalid snapshots. Maps containing the LFE struct
+marker key `__struct__` are retained as ordinary data using LFE's plain
+readable printer because the pretty-printer treats that key as struct syntax.
+
 ## Generate an EEP-48 sidecar with EDoc
 
 For a source-comment module, compile and run OTP EDoc as a caller step. Use a fresh trusted package or output directory so an old chunk cannot be mistaken for the current conversion. The package layout is `ebin/<module>.beam` beside `doc/chunks/<module>.chunk`.

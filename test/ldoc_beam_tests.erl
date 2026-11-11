@@ -4,7 +4,7 @@
 
 ldoc_beam_test_() ->
     {setup, fun setup/0, fun cleanup/1,
-     fun(Temp) -> ?_test(run(Temp)) end}.
+     fun(Temp) -> {timeout, 120, ?_test(run(Temp))} end}.
 
 setup() ->
     make_temp_dir(os:getenv("TMPDIR", "/tmp"), 0).
@@ -54,7 +54,8 @@ run(Temp) ->
     ldo_s01(LegacyBeamPath),
     ldo_s02(Temp, LegacyBeam),
     ldo_s03_collect(Temp, LfePath, ErlPath, Classic, LegacyBeam),
-    mix_s01_s04(Temp, LfePath, ErlPath, Classic, LegacyBeamPath).
+    mix_s01_s04(Temp, LfePath, ErlPath, Classic, LegacyBeamPath),
+    store_s01_s06(Temp, LfePath, ErlPath, Classic, LegacyBeamPath).
 
 eep_s01(LfePath) ->
     ?assert(filelib:is_regular(code:which('ldoc-beam'))),
@@ -563,6 +564,658 @@ mix_s01_s04(Temp, LfePath, ErlPath, Classic, LegacyPath) ->
     ?assertEqual({error, {collect_failed, MissingPath, {read_beam, enoent}}},
                  assemble_without_loading(Release,
                                           [LfePath, MissingPath, AliasPath])).
+
+store_s01_s06(Temp, LfePath, ErlPath, Classic, LegacyPath) ->
+    Root = filename:join(Temp, "exact-release-store"),
+    Release1 = #{namespace => <<"local">>, package => <<"beam-fixtures">>,
+                 version => <<"1.0">>},
+    Release2 = Release1#{version := <<"v1.0">>},
+    EdocPath = maps:get(beam_path, Classic),
+    Inputs = [LegacyPath,
+              {EdocPath, {edoc, maps:get(source_path, Classic),
+                          [maps:get(include_dir, Classic)]}},
+              ErlPath, LfePath],
+    {ok, Docset1} = assemble_without_loading(Release1, Inputs),
+    {ok, Docset2} = assemble_without_loading(Release2, Inputs),
+    ok = 'ldoc-store':put(Root, Docset1),
+    ok = 'ldoc-store':put(Root, Docset2),
+    ?assertEqual({ok, Docset1}, 'ldoc-store':get(Root, Release1)),
+    ?assertEqual({ok, Docset2}, 'ldoc-store':get(Root, Release2)),
+    store_producer_oracles(Root, Release1, Docset1),
+    store_supported_edges(Temp, Release1),
+    store_data_only_reader(Temp, Root, Release1, Release2, Docset1, Docset2),
+    store_addressing(Temp, Inputs),
+    store_retry_and_conflict(Root, Release1, Release2, Docset1, Docset2),
+    store_invalid_inputs(Temp, Root, Release1, Docset1),
+    store_corruption(Temp, Root, Release1, Release2, Docset1, Docset2),
+    store_concurrency(Temp, Release1, Docset1),
+    store_filesystem_failure(Temp, Root, Release1, Docset1),
+    store_fresh_vm(Root, Release1, LfePath, ErlPath, EdocPath, LegacyPath),
+    store_source_guarantees(Root, Release1, Docset1).
+
+store_producer_oracles(Root, Release, Docset) ->
+    Modules = maps:get(modules, Docset),
+    Lfe = module_named(Modules, <<"ldoc-fixture">>),
+    LfeEntries = maps:get(entries, Lfe),
+    ?assertEqual(#{<<"en">> => <<"One argument.">>},
+                 entry_doc(LfeEntries, <<"function">>, <<"sample">>, 1)),
+    ?assertEqual(#{<<"en">> => <<"Two arguments.">>},
+                 entry_doc(LfeEntries, <<"function">>, <<"sample">>, 2)),
+    ?assertEqual(none,
+                 entry_doc(LfeEntries, <<"function">>, <<"bare">>, 0)),
+    ?assertEqual(internal,
+                 maps:get(visibility,
+                          entry(LfeEntries, <<"function">>,
+                                <<"LFE-EXPAND-EXPORTED-MACRO">>, 3))),
+    Classic = module_named(Modules, <<"ldoc_classic">>),
+    ClassicEntry = entry(maps:get(entries, Classic), <<"function">>,
+                         <<"show">>, 1),
+    ?assertEqual(#{<<"en">> => [{p, [], [<<"Show the input.">>]}]},
+                 maps:get(doc, ClassicEntry)),
+    ?assertMatch([{attribute, 6, spec, _}],
+                 maps:get(signature, maps:get(metadata, ClassicEntry))),
+    ?assertEqual(7, erl_anno:line(maps:get(annotation, ClassicEntry))),
+    ?assertEqual(filename:absname(maps:get(source_path,
+                                           maps:get(conversion,
+                                                    maps:get(source, Classic)))),
+                 maps:get(source_path,
+                          maps:get(conversion, maps:get(source, Classic)))),
+    ?assertEqual(caller_declared,
+                 maps:get(evidence, maps:get(conversion,
+                                             maps:get(source, Classic)))),
+    ?assertEqual(eep48_sidecar, maps:get(carrier, maps:get(source, Classic))),
+    Legacy = module_named(Modules, <<"ldoc-legacy">>),
+    LegacyMacro = entry(maps:get(entries, Legacy), <<"macro">>,
+                        <<"show">>, unknown),
+    ?assertEqual([{[x], [[is_atom, x]]}, {[x], []}],
+                 maps:get(patterns, LegacyMacro)),
+    ?assertEqual([], maps:get(signatures, LegacyMacro)),
+    Modern = module_named(Modules, <<"ldoc_modern">>),
+    ModernEntries = maps:get(entries, Modern),
+    ?assertEqual(14,
+                 erl_anno:line(maps:get(source_anno,
+                                        maps:get(metadata,
+                                                 entry(ModernEntries,
+                                                       <<"function">>,
+                                                       <<"show">>, 1))))),
+    ?assertEqual(hidden,
+                 entry_doc(ModernEntries, <<"function">>, <<"hidden">>, 0)),
+    ?assertEqual(#{<<"en">> => <<"Get a value.">>},
+                 entry_doc(ModernEntries, <<"callback">>, <<"get">>, 0)),
+    ?assertEqual({ok, Docset},
+                 'ldoc-store':get(Root, Release)),
+    SnapshotPath = store_path(Root, Release),
+    {ok, SnapshotBytes} = file:read_file(SnapshotPath),
+    {ok, [Envelope]} = lfe_io:read_file(SnapshotPath),
+    ?assertEqual(ldoc_snapshot, maps:get(format, Envelope)),
+    ?assertEqual(1, maps:get(format_version, Envelope)),
+    ?assertEqual(Docset, maps:get(docset, Envelope)),
+    ?assert(is_list(unicode:characters_to_list(SnapshotBytes, utf8))),
+    ?assertEqual($\n, binary:last(SnapshotBytes)).
+
+store_addressing(Temp, Inputs) ->
+    Root = filename:join(Temp, "addressing"),
+    Base = #{namespace => <<"local">>, package => <<"beam-fixtures">>,
+             version => <<"1.0">>},
+    ?assertEqual("773D8E522E0E00630A089FE9173C31751D734AFF056BB80787BF8C64ABA241F2.lfe",
+                 filename:basename(store_path(Root, Base))),
+    Keys = [Base,
+            Base#{namespace := <<"local/sub">>},
+            Base#{package := <<"../beam-fixtures">>},
+            Base#{package := <<"beam\\fixtures">>},
+            Base#{namespace := <<"caf\xc3\xa9">>},
+            Base#{package := binary:copy(<<"long">>, 90)},
+            Base#{package := <<"Case">>},
+            Base#{package := <<"case">>},
+            Base#{namespace := <<"\xc3\xa9">>},
+            Base#{namespace := <<"e\xcc\x81">>},
+            Base#{version := <<"v1.0">>}],
+    lists:foreach(
+      fun(Key) ->
+          {ok, Docset} = assemble_without_loading(Key, Inputs),
+          ok = 'ldoc-store':put(Root, Docset),
+          ?assertEqual({ok, Docset}, 'ldoc-store':get(Root, Key)),
+          Name = filename:basename(store_path(Root, Key)),
+          ?assertEqual(68, length(Name)),
+          ?assertEqual(".lfe", lists:nthtail(64, Name)),
+          ?assert(lists:all(fun(C) ->
+                                (C >= $0 andalso C =< $9) orelse
+                                (C >= $A andalso C =< $F)
+                            end, lists:sublist(Name, 64)))
+      end, Keys),
+    Paths = [store_path(Root, Key) || Key <- Keys],
+    ?assertEqual(length(Keys), length(lists:usort(Paths))),
+    BinaryRoot = list_to_binary(filename:join(Temp, "binary-root")),
+    {ok, BinaryRootDocset} = assemble_without_loading(Base, Inputs),
+    ok = 'ldoc-store':put(BinaryRoot, BinaryRootDocset),
+    ?assertEqual({ok, BinaryRootDocset}, 'ldoc-store':get(BinaryRoot, Base)),
+    MissingRoot = filename:join(Temp, "never-created-store"),
+    ?assertEqual({error, not_found}, 'ldoc-store':get(MissingRoot, Base)),
+    ?assertEqual(false, filelib:is_dir(MissingRoot)),
+    ?assertEqual({error, not_found},
+                 'ldoc-store':get(Root, Base#{version := <<"missing">>})),
+    ?assertEqual(false, filelib:is_dir(MissingRoot)).
+
+store_supported_edges(Temp, Release) ->
+    EdgeRelease = Release#{version := <<"edges">>},
+    Text = <<"quote \" slash \\ line\n café">>,
+    NumericKeys = #{1 => integer_key, 1.0 => float_key},
+    SpecialKey = #{'__struct__' => <<"ordinary-map-value">>, field => true},
+    SpecialAtomKey = #{'__struct__' => ordinary_type, field => 2},
+    Docset = #{release => EdgeRelease,
+               modules => [#{name => <<"edge-literals">>,
+                             entries => [],
+                             metadata => #{text => Text,
+                                           bitstring => <<5:3>>,
+                                           improper => [head | tail],
+                                           numeric_keys => NumericKeys,
+                                           special_key => SpecialKey,
+                                           special_atom_key => SpecialAtomKey}}]},
+    Root = filename:join(Temp, "literal-codec-edges"),
+    ok = 'ldoc-store':put(Root, Docset),
+    ?assertEqual({ok, Docset}, 'ldoc-store':get(Root, EdgeRelease)),
+    {ok, [Envelope]} = lfe_io:read_file(store_path(Root, EdgeRelease)),
+    ?assertEqual(Docset, maps:get(docset, Envelope)),
+    Metadata = maps:get(metadata, hd(maps:get(modules, Docset))),
+    ?assertEqual(integer_key, maps:get(1, maps:get(numeric_keys, Metadata))),
+    ?assertEqual(float_key, maps:get(1.0, maps:get(numeric_keys, Metadata))),
+    ?assertEqual(SpecialKey, maps:get(special_key, Metadata)),
+    ?assertEqual(SpecialAtomKey, maps:get(special_atom_key, Metadata)).
+
+store_data_only_reader(Temp, Root, Release, OtherRelease, Docset, OtherDocset) ->
+    Path = store_path(Root, Release),
+    {ok, OriginalBytes} = file:read_file(Path),
+    Marker = store_reader_eval_marker,
+    SnapshotPrefix = lists:concat(
+                       ["#M(format ldoc_snapshot format_version 1 docset ",
+                        "#M(release #M(namespace #\"local\" package ",
+                        "#\"beam-fixtures\" version #\"1.0\") modules ",
+                        "(#M(name #\"store-marker-fixture\" metadata ",
+                        "#M(attack "]),
+    SnapshotSuffix = ") entries ())))",
+    ReaderEval = lists:concat(
+                   ["#.(call \x27erlang \x27put ",
+                    "\x27store_reader_eval_marker \x27executed)"]),
+    ComputedBinary = lists:concat(
+                       ["#B(((progn (call \x27erlang \x27put ",
+                        "\x27store_reader_eval_marker \x27executed) 5) ",
+                        "(size 3)))"]),
+    ?assertMatch({ok, [_]}, lfe_io:read_string(ReaderEval)),
+    ?assertEqual(executed, erase(Marker)),
+    ?assertMatch({ok, [_]}, lfe_io:read_string(ComputedBinary)),
+    ?assertEqual(executed, erase(Marker)),
+    {ok, [Envelope]} = lfe_io:read_file(Path),
+    ValidThenReaderEval = iolist_to_binary(
+                            [lfe_io:prettyprint1(Envelope), "\n", ReaderEval]),
+    BadSnapshots = [iolist_to_binary([SnapshotPrefix, ReaderEval,
+                                      SnapshotSuffix]),
+                    iolist_to_binary([SnapshotPrefix, ComputedBinary,
+                                      SnapshotSuffix]),
+                    ValidThenReaderEval],
+    lists:foreach(
+      fun(BadBytes) ->
+          ok = file:write_file(Path, BadBytes),
+          ?assertEqual(undefined, erase(Marker)),
+          ?assertEqual({error, invalid_snapshot},
+                       'ldoc-store':get(Root, Release)),
+          ?assertEqual(undefined, get(Marker)),
+          ?assertEqual(undefined, erase(Marker)),
+          ?assertEqual({error, invalid_snapshot},
+                       'ldoc-store':put(Root, Docset)),
+          ?assertEqual(undefined, get(Marker)),
+          ?assertEqual({ok, BadBytes}, file:read_file(Path)),
+          ?assertEqual({ok, OtherDocset},
+                       'ldoc-store':get(Root, OtherRelease))
+      end, BadSnapshots),
+    ok = file:write_file(Path, OriginalBytes),
+    ?assertEqual({ok, Docset}, 'ldoc-store':get(Root, Release)),
+
+    LiteralPath = filename:join(Temp, "literal-token-controls"),
+    LiteralDocset = #{release => Release,
+                      modules => [#{name => <<"literal-controls">>,
+                                    entries => [],
+                                    metadata => #{literal_eval_symbol =>
+                                                    list_to_atom("#."),
+                                                  literal_binary_symbol =>
+                                                    list_to_atom("#B("),
+                                                  quoted => [quote, foo],
+                                                  backquoted => [backquote, bar],
+                                                  comma => [comma, baz],
+                                                  bytes => <<1, 2, 3>>,
+                                                  partial_bits => <<5:3>>,
+                                                  text =>
+                                                    <<"literal #.(not executed); ",
+                                                      "#B(3); café">>}}]},
+    ok = 'ldoc-store':put(LiteralPath, LiteralDocset),
+    ?assertEqual({ok, LiteralDocset},
+                 'ldoc-store':get(LiteralPath, Release)),
+    {ok, [LiteralEnvelope]} =
+        lfe_io:read_file(store_path(LiteralPath, Release)),
+    LiteralMetadata = maps:get(metadata,
+                               hd(maps:get(modules,
+                                           maps:get(docset, LiteralEnvelope)))),
+    ?assertEqual(list_to_atom("#."), maps:get(literal_eval_symbol,
+                                               LiteralMetadata)),
+    ?assertEqual(list_to_atom("#B("), maps:get(literal_binary_symbol,
+                                                LiteralMetadata)),
+    ?assertEqual([quote, foo], maps:get(quoted, LiteralMetadata)),
+    ?assertEqual([backquote, bar], maps:get(backquoted, LiteralMetadata)),
+    ?assertEqual([comma, baz], maps:get(comma, LiteralMetadata)),
+    ?assertEqual(undefined, get(Marker)),
+    ReaderSyntaxBytes = iolist_to_binary(
+                          ["#M(format ldoc_snapshot format_version 1 docset ",
+                           "#M(release #M(namespace #\"local\" package ",
+                           "#\"beam-fixtures\" version #\"1.0\") modules ",
+                           "(#M(name #\"literal-token-syntax\" entries () ",
+                           "metadata #M(eval_symbol |#.| ",
+                           "binary_symbol |#B(| ",
+                           "text #\"contains #.(not executed) and #B(3)\" ",
+                           "quoted 'foo backquoted `bar comma ,baz)))))"]),
+    ReaderSyntaxPath = store_path(LiteralPath, Release),
+    ok = file:write_file(ReaderSyntaxPath, ReaderSyntaxBytes),
+    ?assertEqual(
+       {ok, #{release => Release,
+              modules => [#{name => <<"literal-token-syntax">>,
+                            entries => [],
+                            metadata => #{eval_symbol => list_to_atom("#."),
+                                          binary_symbol => list_to_atom("#B("),
+                                          text => <<"contains #.(not executed) and #B(3)">>,
+                                          quoted => [quote, foo],
+                                          backquoted => [backquote, bar],
+                                          comma => [comma, baz]}}]}},
+       'ldoc-store':get(LiteralPath, Release)),
+    ?assertEqual(undefined, get(Marker)).
+
+store_retry_and_conflict(Root, Release1, Release2, Docset1, Docset2) ->
+    Path1 = store_path(Root, Release1),
+    {ok, OriginalBytes} = file:read_file(Path1),
+    ok = 'ldoc-store':put(Root, Docset1),
+    {ok, RetryBytes} = file:read_file(Path1),
+    ?assertEqual(OriginalBytes, RetryBytes),
+    {ok, [Envelope]} = lfe_io:read_file(Path1),
+    Reformat = iolist_to_binary([";; readable equivalent\n",
+                                 lfe_io:print1(Envelope), "\n\n"]),
+    ok = file:write_file(Path1, Reformat),
+    ?assertEqual({ok, Docset1}, 'ldoc-store':get(Root, Release1)),
+    ok = 'ldoc-store':put(Root, Docset1),
+    {ok, AfterReformatRetry} = file:read_file(Path1),
+    ?assertEqual(Reformat, AfterReformatRetry),
+    Changed = change_first_documented_body(Docset1),
+    ?assertEqual({error, {release_conflict, Release1}},
+                 'ldoc-store':put(Root, Changed)),
+    {ok, AfterConflict} = file:read_file(Path1),
+    ?assertEqual(Reformat, AfterConflict),
+    ?assertEqual({ok, Docset1}, 'ldoc-store':get(Root, Release1)),
+    ?assertEqual({ok, Docset2}, 'ldoc-store':get(Root, Release2)).
+
+store_invalid_inputs(Temp, Root, Release, Docset) ->
+    Absent = filename:join(Temp, "rejected-store-inputs"),
+    {ok, ExistingBytes} = file:read_file(store_path(Root, Release)),
+    Fun = fun() -> ok end,
+    Ref = make_ref(),
+    Port = open_port({spawn_executable, os:find_executable("true")}, []),
+    try
+        Unsupported = [Fun, self(), Port, Ref],
+        lists:foreach(
+          fun(Value) ->
+              Bad = put_module_field(Docset, metadata,
+                                     #{nested => [ok | #{key => Value}]}),
+              ?assertEqual({error, unsupported_snapshot_term},
+                           'ldoc-store':put(Absent, Bad)),
+              ?assertEqual(false, filelib:is_dir(Absent)),
+              ?assertEqual({error, unsupported_snapshot_term},
+                           'ldoc-store':put(Root, Bad)),
+              ?assertEqual(ExistingBytes,
+                           element(2, file:read_file(store_path(Root, Release))))
+          end, Unsupported),
+        ?assertEqual({error, invalid_docset},
+                     'ldoc-store':put(Absent, #{release => Release,
+                                                modules => []})),
+        ?assertEqual({error, invalid_docset},
+                     'ldoc-store':put(Absent, Docset#{extra => true})),
+        ?assertEqual({error, invalid_docset},
+                     'ldoc-store':put(Absent,
+                                      Docset#{modules := [#{name => <<>>}]})),
+        [FirstModule | _RestModules] = maps:get(modules, Docset),
+        ?assertEqual({error, invalid_docset},
+                     'ldoc-store':put(Absent,
+                                      Docset#{modules := [FirstModule |
+                                                          improper_tail]})),
+        ?assertEqual({error, invalid_docset},
+                     'ldoc-store':put(Absent,
+                                      Docset#{modules := lists:reverse(
+                                                          maps:get(modules,
+                                                                   Docset))})),
+        ?assertEqual({error, invalid_release_key},
+                     'ldoc-store':put(Absent,
+                                      Docset#{release := Release#{version := 2}})),
+        ?assertEqual({error, invalid_store_root},
+                     'ldoc-store':put(<<>>, Docset)),
+        ?assertEqual({error, invalid_docset},
+                     'ldoc-store':put(Absent, Docset#{modules := []})),
+        ?assertEqual(false, filelib:is_dir(Absent)),
+        ?assertEqual({error, invalid_store_root}, 'ldoc-store':get(<<>>, Release)),
+        ?assertEqual({error, invalid_release_key},
+                     'ldoc-store':get(Absent, Release#{version := <<>>}))
+    after
+        _ = port_close(Port)
+    end,
+    ?assertEqual(ExistingBytes,
+                 element(2, file:read_file(store_path(Root, Release)))).
+
+store_corruption(Temp, Root, Release, OtherRelease, Docset, OtherDocset) ->
+    Path = store_path(Root, Release),
+    OtherPath = store_path(Root, OtherRelease),
+    {ok, GoodBytes} = file:read_file(Path),
+    BadBodies = [<<255>>, <<"#M(format">>, <<>>, <<GoodBytes/binary, "\n#()\n">>,
+                 <<"#M(wrong header).\n">>,
+                 iolist_to_binary(lfe_io:prettyprint1(
+                                    #{format => ldoc_snapshot,
+                                      format_version => 1,
+                                      docset => #{release => Release,
+                                                  modules => []}}))],
+    lists:foreach(
+      fun(Bytes) ->
+          ok = file:write_file(Path, Bytes),
+          ?assertEqual({error, invalid_snapshot},
+                       'ldoc-store':get(Root, Release)),
+          ?assertEqual({error, invalid_snapshot},
+                       'ldoc-store':put(Root, Docset)),
+          ?assertEqual({ok, Bytes}, file:read_file(Path)),
+          ?assertEqual({ok, OtherDocset},
+                       'ldoc-store':get(Root, OtherRelease))
+      end, BadBodies),
+    Unsupported = iolist_to_binary(lfe_io:prettyprint1(
+                                     #{format => ldoc_snapshot,
+                                       format_version => 23,
+                                       docset => invalid_body})),
+    ok = file:write_file(Path, Unsupported),
+    ?assertEqual({error, {unsupported_snapshot_version, 23}},
+                 'ldoc-store':get(Root, Release)),
+    ?assertEqual({error, {unsupported_snapshot_version, 23}},
+                 'ldoc-store':put(Root, Docset)),
+    ?assertEqual({ok, Unsupported}, file:read_file(Path)),
+    MismatchBytes = iolist_to_binary([lfe_io:prettyprint1(
+                                       #{format => ldoc_snapshot,
+                                         format_version => 1,
+                                         docset => OtherDocset}), "\n"]),
+    ok = file:write_file(Path, MismatchBytes),
+    ?assertEqual({error, {release_mismatch, Release, OtherRelease}},
+                 'ldoc-store':get(Root, Release)),
+    ?assertEqual({error, {release_mismatch, Release, OtherRelease}},
+                 'ldoc-store':put(Root, Docset)),
+    ?assertEqual({ok, MismatchBytes}, file:read_file(Path)),
+    ok = file:delete(Path),
+    ok = file:make_dir(Path),
+    ?assertEqual({error, invalid_snapshot}, 'ldoc-store':get(Root, Release)),
+    ?assertEqual({error, invalid_snapshot}, 'ldoc-store':put(Root, Docset)),
+    ?assert(filelib:is_dir(Path)),
+    ok = file:del_dir(Path),
+    ok = file:write_file(Path, GoodBytes),
+    Symlink = filename:join(Temp, "snapshot-symlink"),
+    ok = file:make_symlink(OtherPath, Symlink),
+    ok = file:delete(Path),
+    ok = file:make_symlink(Symlink, Path),
+    ?assertEqual({error, invalid_snapshot}, 'ldoc-store':get(Root, Release)),
+    ?assertEqual({error, invalid_snapshot}, 'ldoc-store':put(Root, Docset)),
+    ?assertMatch({ok, _}, file:read_link(Path)),
+    ok = file:delete(Path),
+    ok = file:write_file(Path, GoodBytes),
+    ?assertEqual({ok, Docset}, 'ldoc-store':get(Root, Release)).
+
+put_module_field(Docset, Field, Value) ->
+    [First | Rest] = maps:get(modules, Docset),
+    Docset#{modules := [First#{Field => Value} | Rest]}.
+
+change_first_documented_body(Docset) ->
+    [First | Rest] = maps:get(modules, Docset),
+    Entries = maps:get(entries, First),
+    ChangedEntries =
+        [case {maps:get(kind, Entry), maps:get(name, Entry),
+               maps:get(arity, Entry)} of
+             {<<"function">>, <<"sample">>, 1} ->
+                 Entry#{doc := #{<<"en">> => <<"Changed producer body.">>}};
+             _ -> Entry
+         end || Entry <- Entries],
+    ChangedFirst = First#{entries := ChangedEntries},
+    Docset#{modules := [ChangedFirst | Rest]}.
+
+store_path(Root, Release) ->
+    Namespace = maps:get(namespace, Release),
+    Package = maps:get(package, Release),
+    Version = maps:get(version, Release),
+    Preimage = <<"ldoc-release-v1", 0,
+                 (byte_size(Namespace)):64/unsigned-big, Namespace/binary,
+                 (byte_size(Package)):64/unsigned-big, Package/binary,
+                 (byte_size(Version)):64/unsigned-big, Version/binary>>,
+    Digest = crypto:hash(sha256, Preimage),
+    Hex = binary:encode_hex(Digest, uppercase),
+    Child = case is_binary(Root) of
+                true -> <<Hex/binary, ".lfe">>;
+                false -> binary_to_list(Hex) ++ ".lfe"
+            end,
+    filename:join(Root, Child).
+
+store_concurrency(Temp, Release, Docset) ->
+    RootSame = filename:join(Temp, "concurrent-identical"),
+    SameRef = make_ref(),
+    SameWriters = [spawn_monitor(fun() ->
+                                     await_and_put(Parent, SameRef, RootSame,
+                                                   Docset)
+                                 end) || Parent <- [self(), self()]],
+    try
+        await_writers(SameWriters, SameRef),
+        ?assertEqual([ok, ok],
+                     lists:sort(collect_writer_results(SameRef, 2, []))),
+        await_writer_downs(SameWriters),
+        ?assertEqual({ok, Docset}, 'ldoc-store':get(RootSame, Release))
+    after
+        cancel_monitored(SameWriters)
+    end,
+    store_different_concurrency(Temp, Release, Docset).
+
+store_different_concurrency(Temp, Release, Docset) ->
+    RootDifferent = filename:join(Temp, "concurrent-different"),
+    OtherDocset = change_first_documented_body(Docset),
+    DiffRef = make_ref(),
+    Parent = self(),
+    DiffWriters = [spawn_monitor(fun() ->
+                                     await_and_put(Parent, DiffRef,
+                                                   RootDifferent, Candidate)
+                                 end) || Candidate <- [Docset, OtherDocset]],
+    Reader = spawn_monitor(fun() ->
+                               await_reader_go(Parent, RootDifferent, Release,
+                                               Docset, OtherDocset)
+                           end),
+    try
+        await_writer_readiness(DiffWriters, DiffRef),
+        ReaderPid = element(1, Reader),
+        receive {reader_ready, ReaderPid} -> ReaderPid ! reader_go
+        after 30000 -> erlang:error(concurrent_reader_start_timeout)
+        end,
+        release_writers(DiffWriters, DiffRef),
+        DiffResults = collect_writer_results(DiffRef, 2, []),
+        await_writer_downs(DiffWriters),
+        ?assertEqual(1, length([ok || ok <- DiffResults])),
+        ?assertEqual(1, length([Key || {error, {release_conflict, Key}} <-
+                                           DiffResults, Key =:= Release])),
+        {ok, Winner} = 'ldoc-store':get(RootDifferent, Release),
+        ?assert(Winner =:= Docset orelse Winner =:= OtherDocset),
+        receive
+            {reader_observations, ReaderPid, Observations} ->
+                ?assertEqual(64, length(Observations)),
+                ?assert(lists:all(fun(Observation) ->
+                                      Observation =:= {error, not_found} orelse
+                                      Observation =:= {ok, Docset} orelse
+                                      Observation =:= {ok, OtherDocset}
+                                  end, Observations))
+        after 30000 ->
+            erlang:error(concurrent_reader_timeout)
+        end,
+        await_monitor_normal(Reader)
+    after
+        cancel_monitored(DiffWriters ++ [Reader])
+    end,
+    PartialRoot = filename:join(Temp, "partial-temporary"),
+    ok = filelib:ensure_dir(filename:join(PartialRoot, "placeholder")),
+    Partial = filename:join(PartialRoot, ".ldoc-interrupted.tmp"),
+    ok = file:write_file(Partial, <<"#M(format ldoc_snapshot">>),
+    ?assertEqual({error, not_found}, 'ldoc-store':get(PartialRoot, Release)),
+    ?assert(filelib:is_regular(Partial)),
+    ok.
+
+await_and_put(Parent, Ref, Root, Docset) ->
+    Parent ! {writer_ready, Ref, self()},
+    receive
+        {writer_go, Ref} ->
+            Result = 'ldoc-store':put(Root, Docset),
+            Parent ! {writer_result, Ref, self(), Result}
+    after 30000 ->
+        erlang:error(writer_gate_timeout)
+    end.
+
+await_writers(Writers, Ref) ->
+    await_writer_readiness(Writers, Ref),
+    release_writers(Writers, Ref).
+
+await_writer_readiness(Writers, Ref) ->
+    lists:foreach(fun({Pid, _Monitor}) ->
+                      receive {writer_ready, Ref, Pid} -> ok
+                      after 30000 ->
+                          erlang:error(concurrent_writer_start_timeout)
+                      end
+                  end, Writers).
+
+release_writers(Writers, Ref) ->
+    lists:foreach(fun({Pid, _Monitor}) -> Pid ! {writer_go, Ref} end, Writers).
+
+await_writer_downs(Writers) ->
+    lists:foreach(fun({Pid, Monitor}) ->
+                      receive
+                          {'DOWN', Monitor, process, Pid, normal} -> ok;
+                          {'DOWN', Monitor, process, Pid, Reason} ->
+                              erlang:error({concurrent_writer_crashed, Reason})
+                      after 30000 ->
+                          erlang:error(concurrent_writer_monitor_timeout)
+                      end
+                  end, Writers).
+
+await_monitor_normal({Pid, Monitor}) ->
+    receive
+        {'DOWN', Monitor, process, Pid, normal} -> ok;
+        {'DOWN', Monitor, process, Pid, Reason} ->
+            erlang:error({concurrent_reader_crashed, Reason})
+    after 30000 ->
+        erlang:error(concurrent_reader_monitor_timeout)
+    end.
+
+cancel_monitored(Writers) ->
+    lists:foreach(fun({Pid, Monitor}) ->
+                      _ = exit(Pid, kill),
+                      _ = erlang:demonitor(Monitor, [flush])
+                  end, Writers).
+
+collect_writer_results(_Ref, 0, Results) ->
+    lists:reverse(Results);
+collect_writer_results(Ref, Remaining, Results) ->
+    receive
+        {writer_result, Ref, _Pid, Result} ->
+            collect_writer_results(Ref, Remaining - 1, [Result | Results]);
+        {'DOWN', _Monitor, process, _Pid, Reason} when Reason =/= normal ->
+            erlang:error({concurrent_writer_crashed, Reason})
+    after 30000 ->
+        erlang:error(concurrent_writer_timeout)
+    end.
+
+await_reader_go(Parent, Root, Release, Docset, OtherDocset) ->
+    Parent ! {reader_ready, self()},
+    receive
+        reader_go ->
+            Observations = [begin
+                                Result = 'ldoc-store':get(Root, Release),
+                                case Result =:= {error, not_found} orelse
+                                     Result =:= {ok, Docset} orelse
+                                     Result =:= {ok, OtherDocset} of
+                                    true -> Result;
+                                    false -> {invalid_observation, Result}
+                                end
+                            end || _ <- lists:seq(1, 64)],
+            Parent ! {reader_observations, self(), Observations}
+    after 30000 ->
+        erlang:error(concurrent_reader_gate_timeout)
+    end.
+
+store_filesystem_failure(Temp, Root, Release, Docset) ->
+    Blocker = filename:join(Temp, "store-root-is-a-file"),
+    ok = file:write_file(Blocker, <<"root blocker">>),
+    ?assertMatch({error, {store_io, _, _, _}},
+                 'ldoc-store':put(Blocker, Docset)),
+    ?assertMatch({error, {store_io, _, _, _}},
+                 'ldoc-store':get(Blocker, Release)),
+    ?assertEqual({ok, Docset}, 'ldoc-store':get(Root, Release)).
+
+store_fresh_vm(Root, Release, LfePath, ErlPath, EdocPath, LegacyPath) ->
+    Paths = [LfePath, ErlPath, EdocPath, LegacyPath],
+    Parked = [{Path, Path ++ ".store-test-offline"} || Path <- Paths],
+    lists:foreach(fun({Path, ParkedPath}) ->
+                      ?assert(filelib:is_regular(Path)),
+                      ok = file:rename(Path, ParkedPath)
+                  end, Parked),
+    try
+        ?assert(lists:all(fun({_Path, ParkedPath}) ->
+                              filelib:is_regular(ParkedPath)
+                          end, Parked)),
+        run_fresh_store_vm(Root, Release)
+    after
+        lists:foreach(fun({Path, ParkedPath}) ->
+                          ok = file:rename(ParkedPath, Path)
+                      end, Parked)
+    end.
+
+run_fresh_store_vm(Root, _Release) ->
+    Erl = os:find_executable("erl"),
+    Eval = "Root = hd(init:get_plain_arguments()), "
+           "Release = #{namespace => <<\"local\">>, "
+           "package => <<\"beam-fixtures\">>, version => <<\"1.0\">>}, "
+           "{ok, _} = application:ensure_all_started(ldoc), "
+           "{ok, Docset} = 'ldoc-store':get(Root, Release), "
+           "Release = maps:get(release, Docset), "
+           "[<<\"ldoc-fixture\">>, <<\"ldoc-legacy\">>, "
+           "<<\"ldoc_classic\">>, <<\"ldoc_modern\">>] = "
+           "[maps:get(name, M) || M <- maps:get(modules, Docset)], "
+           "io:format(\"STORE_FRESH_VM_OK~n\"), halt(0).",
+    CodePaths = lists:append([["-pa", Path] || Path <- code:get_path()]),
+    Args = ["-noshell"] ++ CodePaths ++ ["-eval", Eval, "-extra", Root],
+    Port = open_port({spawn_executable, Erl},
+                     [{args, Args}, binary, exit_status, use_stdio,
+                      stderr_to_stdout]),
+    collect_fresh_vm(Port, []).
+
+collect_fresh_vm(Port, Reversed) ->
+    receive
+        {Port, {data, Bytes}} ->
+            collect_fresh_vm(Port, [Bytes | Reversed]);
+        {Port, {exit_status, 0}} ->
+            Output = iolist_to_binary(lists:reverse(Reversed)),
+            ?assertNotEqual(nomatch,
+                            binary:match(Output, <<"STORE_FRESH_VM_OK">>)),
+            ok;
+        {Port, {exit_status, Status}} ->
+            Output = iolist_to_binary(lists:reverse(Reversed)),
+            erlang:error({fresh_store_vm_failed, Status, Output})
+    after 30000 ->
+        port_close(Port),
+        erlang:error(fresh_store_vm_timeout)
+    end.
+
+store_source_guarantees(Root, Release, Docset) ->
+    ?assertEqual({ok, Docset}, 'ldoc-store':get(Root, Release)),
+    TempNames = case file:list_dir(Root) of
+                    {ok, Names} -> Names;
+                    {error, Reason} -> erlang:error({store_listing, Reason})
+                end,
+    ?assertEqual([], [Name || Name <- TempNames,
+                              lists:prefix(".ldoc-", Name)]).
 
 module_named(Modules, Name) ->
     [Module] = [M || M <- Modules, maps:get(name, M) =:= Name],

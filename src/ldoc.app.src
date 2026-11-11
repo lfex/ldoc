@@ -2,6 +2,7 @@
  [{description, "Library for reading BEAM documentation chunks"},
   {vsn, "0.1.0-dev"},
   {registered, []},
-  {applications, [kernel, stdlib]},
+  {applications, [kernel, stdlib, lfe, crypto]},
   {env, []},
-  {modules, ['ldoc-beam', 'ldoc-docset', 'ldoc-eep48', 'ldoc-etf', 'ldoc-legacy']}]}.
+  {modules, ['ldoc-beam', 'ldoc-docset', 'ldoc-eep48', 'ldoc-etf',
+             'ldoc-legacy', 'ldoc-store']}]}.

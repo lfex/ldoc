@@ -2,7 +2,11 @@
 
 (defmodule ldoc-docset
   (export
-   (assemble 2)))
+   (assemble 2)
+   (valid-release? 1)))
+
+(defspec (valid-release? 1)
+  ([(term)] 'boolean))
 
 (defspec (assemble 2)
   ([(map) (list)]
@@ -35,6 +39,10 @@
          '#(error invalid_inputs)))))
 
 (defun valid-release? (release)
+  "Return true when RELEASE is exactly the supported three-field release key.
+
+  Each namespace, package, and version value must be a nonempty valid UTF-8
+  binary. Storage reuses this predicate so assembly and retrieval agree."
   (andalso (is_map release)
            (=:= (maps:size release) 3)
            (maps:is_key 'namespace release)
