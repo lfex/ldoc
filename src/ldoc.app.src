@@ -4,4 +4,4 @@
   {registered, []},
   {applications, [kernel, stdlib]},
   {env, []},
-  {modules, ['ldoc-beam', 'ldoc-eep48', 'ldoc-etf', 'ldoc-legacy']}]}.
+  {modules, ['ldoc-beam', 'ldoc-docset', 'ldoc-eep48', 'ldoc-etf', 'ldoc-legacy']}]}.
