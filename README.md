@@ -128,7 +128,7 @@ declaration, not a value inferred from the store or artifact paths.
                                     overview => <<"# Local API\n\nBrowse the modules below.">>,
                                     source_base => <<"https://example.test/project/">>}),
 OutputDir = "/tmp/my_app-reference",
-ok = filelib:ensure_dir(filename:join(OutputDir, "placeholder")),
+ok = file:make_dir(OutputDir),
 ok = lists:foreach(
        fun({Name, Bytes}) ->
            ok = file:write_file(filename:join(OutputDir, binary_to_list(Name)), Bytes)
@@ -157,9 +157,10 @@ relative source reference and the caller supplies `source_base`. Each path
 component is percent-encoded using unreserved ASCII, slash separators are
 preserved, and a known positive line becomes `#L<n>`. No source host, revision,
 or target is inferred or verified. This is link construction from declared
-inputs, not source checkout authentication. Opaque metadata and path-like prose
-are outside the selected HTML view boundary; the renderer does not promise to
-scrub or redact them from stored producer records or documentation text.
+inputs, not source checkout authentication. Path-like prose and code are
+deliberately retained when they are part of selected documentation; opaque
+producer metadata is excluded from the selected HTML view. The renderer does
+not promise to scrub or redact documentation text.
 Raw typed specs and annotations remain in storage and are not presented as
 inferred types by this API; signatures and classic patterns are the selected
 native view's documented presentation fields.

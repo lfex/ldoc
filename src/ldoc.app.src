@@ -4,5 +4,13 @@
   {registered, []},
   {applications, [kernel, stdlib, lfe, crypto]},
   {env, []},
-  {modules, ['ldoc-analysis', 'ldoc-beam', 'ldoc-docset', 'ldoc-eep48', 'ldoc-html', 'ldoc-html-assets', 'ldoc-markup',
-             'ldoc-etf', 'ldoc-legacy', 'ldoc-store']}]}.
+  {modules, ['ldoc-analysis',
+             'ldoc-beam',
+             'ldoc-docset',
+             'ldoc-eep48',
+             'ldoc-etf',
+             'ldoc-html',
+             'ldoc-html-assets',
+             'ldoc-legacy',
+             'ldoc-markup',
+             'ldoc-store']}]}.
