@@ -41,7 +41,10 @@
     (result result)))
 
 (defun collect (path)
-  "Collect embedded or associated sidecar Docs from a trusted BEAM path."
+  "Collect documentation from a trusted local BEAM path.
+
+  Try embedded EEP-48 Docs, the associated package sidecar, then classic LFE
+  LDoc in the same BEAM. Fall back only when a source is absent."
   (collect-artifact path 'none))
 
 (defun collect (path provenance)

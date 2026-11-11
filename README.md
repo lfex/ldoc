@@ -1,6 +1,8 @@
 # LDOC
 
-LDOC collects EEP-48 documentation from trusted local BEAM artifacts. `read-docs/1` reads only an embedded `Docs` chunk. `collect/1` prefers embedded docs and falls back, only when the chunk is absent, to the EEP-48 sidecar associated with that BEAM's package. Both return the same normalized module map; neither loads the target module or searches the code path.
+LDOC collects API documentation for Erlang, modern LFE, and classic LFE from trusted local BEAM artifacts. `collect/1` looks for an embedded EEP-48 `Docs` chunk, then an associated package sidecar, then the classic LFE `LDoc` chunk in the same BEAM. It falls back only when a source is absent.
+
+`read-docs/1` reads embedded EEP-48 `Docs` only. Both readers return the same module map shape and work from the supplied artifact without loading the target module or searching the code path.
 
 ```erlang
 'ldoc-beam':'read-docs'("_build/default/lib/my_app/ebin/my_module.beam").
