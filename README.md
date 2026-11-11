@@ -97,6 +97,78 @@ annotations. This view exposes the producer's existing signature binaries;
 typed-spec presentation and JSON or other wire formats need a later,
 consumer-specific contract.
 
+## Render a local HTML reference
+
+`ldoc-html:render/1` and `render/2` accept the selected native view from
+`ldoc-analysis:view/1` and return `{ok, Files}`. `Files` is a sorted list of
+`{RelativeFilenameBinary, UTF8BytesBinary}` entries: `index.html`, one
+`m-<SHA-256>.html` module page per module, `ldoc.css`, and `ldoc.js`.
+Invalid option maps return `{error, invalid_options}`; malformed or unsupported
+views return `{error, invalid_view}`. Rendering is in-memory and does not read
+files, load target modules, access the network, or mutate the stored release.
+
+Options are a map containing only:
+
+- `locale`: a nonempty UTF-8 binary, default `<<"en">>`.
+- `overview`: UTF-8 Markdown binary for the overview introduction, default
+  empty.
+- `source_base`: optional absolute HTTP or HTTPS URI ending in `/`, with a
+  nonempty host and no userinfo, query, or fragment. An explicit port must be
+  0 through 65535. Percent escapes must be complete hexadecimal triplets.
+
+Example: export the returned bundle beneath a caller-selected directory and
+open the generated overview. The example's source URL is an explicit caller
+declaration, not a value inferred from the store or artifact paths.
+
+```erlang
+{ok, Docset} = 'ldoc-store':get(StoreRoot, Release),
+{ok, View} = 'ldoc-analysis':view(Docset),
+{ok, Files} = 'ldoc-html':render(View,
+                                  #{locale => <<"en">>,
+                                    overview => <<"# Local API\n\nBrowse the modules below.">>,
+                                    source_base => <<"https://example.test/project/">>}),
+OutputDir = "/tmp/my_app-reference",
+ok = filelib:ensure_dir(filename:join(OutputDir, "placeholder")),
+ok = lists:foreach(
+       fun({Name, Bytes}) ->
+           ok = file:write_file(filename:join(OutputDir, binary_to_list(Name)), Bytes)
+       end,
+       Files).
+```
+
+Open `file:///tmp/my_app-reference/index.html` in a browser. For a local HTTP
+server, run `python3 -m http.server 8000 --directory /tmp/my_app-reference`
+from another terminal and visit `http://localhost:8000/`.
+
+The Markdown renderer implements a safe documented subset: paragraphs, ATX
+headings, unordered and decimal ordered lists, blockquotes, fenced code, pipe
+tables, inline code, strong/emphasis, and inline links. It is not a full
+CommonMark implementation. Raw HTML is shown as escaped text, unsupported
+syntax remains text, and images do not fetch remote content. Links are retained
+only for validated absolute HTTP, HTTPS, or mailto targets; unsafe and
+unsupported targets remain text. `application/erlang+html` documentation uses
+an allowlisted walker for nested native EDoc tags and validated link attributes;
+unknown tags unwrap safe children, while unsupported nodes are escaped.
+Producer HTML attributes such as `id`, `class`, `style`, and event handlers are
+not copied into the generated page.
+
+A source action appears only when both the accepted view contains a valid
+relative source reference and the caller supplies `source_base`. Each path
+component is percent-encoded using unreserved ASCII, slash separators are
+preserved, and a known positive line becomes `#L<n>`. No source host, revision,
+or target is inferred or verified. This is link construction from declared
+inputs, not source checkout authentication. Opaque metadata and path-like prose
+are outside the selected HTML view boundary; the renderer does not promise to
+scrub or redact them from stored producer records or documentation text.
+Raw typed specs and annotations remain in storage and are not presented as
+inferred types by this API; signatures and classic patterns are the selected
+native view's documented presentation fields.
+
+The independently authored layout takes measured page organization cues from
+cljdoc's Reitit 0.11.0 reference and the inspected upstream source at
+`74d0cec6bd252321375b68ee3facb8ae8faf3296` (EPL-2.0). LDOC uses no copied
+upstream source or assets.
+
 ## Generate an EEP-48 sidecar with EDoc
 
 For a source-comment module, compile and run OTP EDoc as a caller step. Use a fresh trusted package or output directory so an old chunk cannot be mistaken for the current conversion. The package layout is `ebin/<module>.beam` beside `doc/chunks/<module>.chunk`.

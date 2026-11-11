@@ -1285,6 +1285,7 @@ analysis_s01_s05(Temp, StoreRoot, Inputs, Docset1, Docset2) ->
     analysis_kind_identity(Retrieved1),
     analysis_doc_states(Retrieved1, View1),
     analysis_sources(Temp, Retrieved1, View1),
+    html_s01_s06(Temp, StoreRoot, Retrieved1, View1),
     analysis_invalid_inputs(Retrieved1),
     PathText = <<"Read /tmp/example.erl before continuing.">>,
     PathDocset = map_entry(
@@ -1304,6 +1305,214 @@ analysis_s01_s05(Temp, StoreRoot, Inputs, Docset1, Docset2) ->
     ?assertEqual(Docset2, PostViewRetrieved2),
     {ok, _} = 'ldoc-docset':assemble(maps:get(release, Retrieved1), Inputs),
     ok.
+
+html_s01_s06(_Temp, StoreRoot, Docset, View) ->
+    Release = maps:get(release, Docset),
+    Before = 'ldoc-store':get(StoreRoot, Release),
+    {ok, Bundle} = 'ldoc-html':render(View),
+    Files = [Name || {Name, _Bytes} <- Bundle],
+    ?assertEqual(lists:sort(Files), Files),
+    ?assertEqual(7, length(Bundle)),
+    ?assert(lists:member(<<"index.html">>, Files)),
+    ?assert(lists:member(<<"ldoc.css">>, Files)),
+    ?assert(lists:member(<<"ldoc.js">>, Files)),
+    ModuleFiles = [Name || Name <- Files,
+                           binary:match(Name, <<"m-">>) =:= {0, 2}],
+    ?assertEqual(4, length(ModuleFiles)),
+    ?assertEqual(14, lists:sum([
+        length(maps:get(definitions, Module)) || Language <- maps:get(languages, View),
+        Module <- maps:get(modules, Language)])),
+    Index = proplists:get_value(<<"index.html">>, Bundle),
+    ?assert(binary:match(Index, <<"local/beam-fixtures 1.0">>) =/= nomatch),
+    ?assert(binary:match(Index, <<"ldoc-fixture">>) =/= nomatch),
+    ClassicName = module_html_name(<<"erlang">>, <<"ldoc_classic">>),
+    ClassicHtml = proplists:get_value(ClassicName, Bundle),
+    ?assert(binary:match(ClassicHtml, <<"<p>Show the input.</p>">>) =/= nomatch),
+    ?assert(binary:match(ClassicHtml, <<"def-66756E6374696F6E-73686F77-1">>) =/= nomatch),
+    LfeHtml = proplists:get_value(module_html_name(<<"lfe">>, <<"ldoc-fixture">>), Bundle),
+    ?assert(binary:match(LfeHtml, <<"One argument.">>) =/= nomatch),
+    ?assert(binary:match(LfeHtml, <<"sample/1">>) =/= nomatch),
+    EmptyTextView = html_empty_text_view(View),
+    {ok, EmptyTextBundle} = 'ldoc-html':render(EmptyTextView),
+    EmptyTextHtml = proplists:get_value(module_html_name(<<"lfe">>, <<"ldoc-fixture">>),
+                                        EmptyTextBundle),
+    ?assert(binary:match(EmptyTextHtml,
+                         <<"<p class=\"state\">Documentation text is empty.</p>">>) =/= nomatch),
+    {ok, Html0} = 'ldoc-markup':render(<<"text/markdown">>, <<"One **bold** and `code`.">>),
+    ?assertEqual(<<"<p>One <strong>bold</strong> and <code>code</code>.</p>">>, Html0),
+    {ok, HtmlEdoc} = 'ldoc-markup':render(<<"application/erlang+html">>,
+                                          [{p, [], [<<"Show the input.">>]}]),
+    ?assertEqual(<<"<p>Show the input.</p>">>, HtmlEdoc),
+    {ok, RichHtml} = 'ldoc-markup':render(
+        <<"text/markdown">>,
+        <<"| key | description |\n| --- | --- |\n| input | `a<b` |\n| output | **safe** |\n\n```\n<script>literal</script>\n```\n\n<script>raw</script>">>),
+    ?assert(binary:match(RichHtml, <<"<table><thead><tr><th>key</th><th>description</th>">>) =/= nomatch),
+    ?assert(binary:match(RichHtml, <<"&lt;script&gt;literal&lt;/script&gt;">>) =/= nomatch),
+    ?assert(binary:match(RichHtml, <<"&lt;script&gt;raw&lt;/script&gt;">>) =/= nomatch),
+    ?assertEqual(nomatch, binary:match(RichHtml, <<"<script>">>)),
+    {ok, LinkHtml} = 'ldoc-markup':render(
+        <<"text/markdown">>,
+        <<"See [safe](https://example.test/a%20b) and [bad](javascript:alert(1)).">>),
+    ?assert(binary:match(LinkHtml,
+                         <<"<a href=\"https://example.test/a%20b\">safe</a>">>) =/= nomatch),
+    ?assertEqual(nomatch, binary:match(LinkHtml, <<"href=\"javascript:">>)),
+    ?assert(binary:match(LinkHtml, <<"bad">>) =/= nomatch),
+    {ok, HostileEdoc} = 'ldoc-markup':render(
+        <<"application/erlang+html">>,
+        [{script, [], [<<"unsafe">>]},
+         {a, [{href, <<"javascript:alert(1)">>}], [<<"link">>]}]),
+    ?assertEqual(nomatch, binary:match(HostileEdoc, <<"<script>">>)),
+    ?assertEqual(nomatch, binary:match(HostileEdoc, <<"href=\"javascript:">>)),
+    ?assertMatch({error, invalid_documentation},
+                 'ldoc-markup':render(<<"application/erlang+html">>, [<<"x">> | improper])),
+    ?assertEqual({error, invalid_view}, 'ldoc-html':render(#{release => maps:get(release, View), languages => []})),
+    ?assertEqual({error, invalid_view}, 'ldoc-html':render(View#{extra => true})),
+    FirstLanguage = hd(maps:get(languages, View)),
+    ?assertEqual({error, invalid_view},
+                 'ldoc-html':render(View#{languages := [FirstLanguage | improper]})),
+    FirstModule = hd(maps:get(modules, FirstLanguage)),
+    BadLaterModule = FirstLanguage#{modules := [FirstModule, FirstModule#{extra => true}]},
+    ?assertEqual({error, invalid_view},
+                 'ldoc-html':render(View#{languages := [FirstLanguage, BadLaterModule]})),
+    FirstDefinition = hd(maps:get(definitions, FirstModule)),
+    BadLaterDefinition = FirstModule#{definitions :=
+        [FirstDefinition, FirstDefinition#{arity := -1}]},
+    BadDefinitionLanguage = FirstLanguage#{modules := [BadLaterDefinition]},
+    ?assertEqual({error, invalid_view},
+                 'ldoc-html':render(View#{languages := [BadDefinitionLanguage]})),
+    ?assertEqual({error, invalid_options}, 'ldoc-html':render(View, #{unknown => true})),
+    URIOptions = [
+        {#{source_base => <<"https://example.test/repo/">>}, ok},
+        {#{source_base => <<"https://example.test:0/repo/">>}, ok},
+        {#{source_base => <<"https://example.test:65535/repo/">>}, ok},
+        {#{source_base => <<"HTTPS://example.test/repo/%20/">>}, ok},
+        {#{source_base => <<"https://example.test:-1/">>}, invalid_options},
+        {#{source_base => <<"https://example.test:65536/">>}, invalid_options},
+        {#{source_base => <<"https://example.test:abc/">>}, invalid_options},
+        {#{source_base => <<"https://example.test:/">>}, invalid_options},
+        {#{source_base => <<"https://example.test/%/">>}, invalid_options},
+        {#{source_base => <<"https://example.test/%GG/">>}, invalid_options},
+        {#{source_base => <<"https://user@example.test/">>}, invalid_options},
+        {#{source_base => <<"https://example.test/?query">>}, invalid_options},
+        {#{source_base => <<"https://example.test/#fragment">>}, invalid_options}],
+    lists:foreach(fun({Options, Expected}) ->
+                      case Expected of
+                          ok -> ?assertMatch({ok, _}, 'ldoc-html':render(View, Options));
+                          invalid_options -> ?assertEqual({error, invalid_options},
+                                                            'ldoc-html':render(View, Options))
+                      end
+                  end, URIOptions),
+    SourceView = html_source_view(View),
+    {ok, SourceBundle} = 'ldoc-html':render(
+                           SourceView,
+                           #{source_base => <<"https://example.test/root%20/">>}),
+    SourceHtml = proplists:get_value(module_html_name(<<"lfe">>, <<"ldoc-fixture">>),
+                                     SourceBundle),
+    ?assert(binary:match(SourceHtml,
+                         <<"https://example.test/root%20/src/a%20%25%3F%23%22%C3%A9.erl#L71">>) =/= nomatch),
+    {ok, After} = 'ldoc-store':get(StoreRoot, Release),
+    ?assertEqual(Before, {ok, After}),
+    ?assertEqual(Docset, After),
+    RichView = html_rich_view(SourceView),
+    html_write_previews(SourceBundle, RichView),
+    ok.
+
+module_html_name(Language, Module) ->
+    DigestInput = <<(byte_size(Language)):32/big, Language/binary,
+                    (byte_size(Module)):32/big, Module/binary>>,
+    Digest = crypto:hash(sha256, DigestInput),
+    Hex = list_to_binary(string:uppercase(binary_to_list(binary:encode_hex(Digest)))),
+    <<"m-", Hex/binary, ".html">>.
+
+html_empty_text_view(View) ->
+    Languages = maps:get(languages, View),
+    UpdatedLanguages = [case maps:get(name, Language) of
+        <<"lfe">> ->
+            Modules = maps:get(modules, Language),
+            UpdatedModules = [case maps:get(name, Module) of
+                <<"ldoc-fixture">> ->
+                    Definitions = maps:get(definitions, Module),
+                    UpdatedDefinitions = [case {maps:get(name, Definition), maps:get(arity, Definition)} of
+                        {<<"sample">>, 1} -> Definition#{doc := #{<<"en">> => <<>>}};
+                        _ -> Definition
+                    end || Definition <- Definitions],
+                    Module#{definitions := UpdatedDefinitions};
+                _ -> Module
+            end || Module <- Modules],
+            Language#{modules := UpdatedModules};
+        _ -> Language
+    end || Language <- Languages],
+    View#{languages := UpdatedLanguages}.
+
+html_source_view(View) ->
+    Languages = maps:get(languages, View),
+    Lfe = lists:keyfind(<<"lfe">>, 1,
+                        [{maps:get(name, L), L} || L <- Languages]),
+    {_, LfeLanguage} = Lfe,
+    Modules = maps:get(modules, LfeLanguage),
+    Fixture = hd([M || M <- Modules, maps:get(name, M) =:= <<"ldoc-fixture">>]),
+    Definitions = maps:get(definitions, Fixture),
+    Sample = hd([D || D <- Definitions,
+                      maps:get(name, D) =:= <<"sample">>,
+                      maps:get(arity, D) =:= 1]),
+    SourcePath = unicode:characters_to_binary("src/a %?#\"é.erl"),
+    Source = #{path => SourcePath, line => 71},
+    UpdatedDefinition = Sample#{source => Source},
+    UpdatedDefinitions = [case D =:= Sample of true -> UpdatedDefinition; false -> D end
+                          || D <- Definitions],
+    UpdatedModule = Fixture#{source => Source, definitions => UpdatedDefinitions},
+    UpdatedModules = [case M =:= Fixture of true -> UpdatedModule; false -> M end
+                      || M <- Modules],
+    UpdatedLanguage = LfeLanguage#{modules => UpdatedModules},
+    UpdatedLanguages = [case L =:= LfeLanguage of true -> UpdatedLanguage; false -> L end
+                        || L <- Languages],
+    View#{languages => UpdatedLanguages}.
+
+html_rich_view(View) ->
+    Languages = maps:get(languages, View),
+    UpdatedLanguages = [case maps:get(name, Language) of
+        <<"lfe">> ->
+            Modules = maps:get(modules, Language),
+            UpdatedModules = [case maps:get(name, Module) of
+                <<"ldoc-fixture">> ->
+                    Definitions = maps:get(definitions, Module),
+                    UpdatedDefinitions = [case {maps:get(name, Definition), maps:get(arity, Definition)} of
+                        {<<"sample">>, 1} -> Definition#{doc := #{<<"en">> =>
+                            <<"# Rich original specimen\n\nA paragraph with **strong** and `code`.\n\n- first item\n- second item\n\n> A quoted note.\n\n| input | output |\n| --- | --- |\n| `a<b` | **safe** |\n\n[reference](https://example.test/docs) and [rejected](javascript:alert(1)).\n\n```\n<script>literal</script>\n```\n\n<script>raw</script>">>}};
+                        _ -> Definition
+                    end || Definition <- Definitions],
+                    Module#{definitions := UpdatedDefinitions};
+                _ -> Module
+            end || Module <- Modules],
+            Language#{modules := UpdatedModules};
+        _ -> Language
+    end || Language <- Languages],
+    View#{languages := UpdatedLanguages}.
+
+html_write_previews(Bundle, RichView) ->
+    PreviewRoot = "/tmp/ldoc-arc03.VCYsb0hy/cc-preview-four-route",
+    RichRoot = "/tmp/ldoc-arc03.VCYsb0hy/cc-preview-rich-original",
+    ok = html_remove_preview(PreviewRoot),
+    ok = html_remove_preview(RichRoot),
+    ok = file:make_dir(PreviewRoot),
+    ok = file:make_dir(RichRoot),
+    {ok, RichBundle} = 'ldoc-html':render(RichView,
+        #{source_base => <<"https://example.test/root%20/">>}),
+    lists:foreach(fun({Name, Bytes}) ->
+                      Path = filename:join(PreviewRoot, binary_to_list(Name)),
+                      ok = file:write_file(Path, Bytes)
+                  end, Bundle),
+    lists:foreach(fun({Name, Bytes}) ->
+                      Path = filename:join(RichRoot, binary_to_list(Name)),
+                      ok = file:write_file(Path, Bytes)
+                  end, RichBundle),
+    ok.
+
+html_remove_preview(Root) ->
+    case file:read_link_info(Root) of
+        {error, enoent} -> ok;
+        {ok, _} -> file:del_dir_r(Root)
+    end.
 
 analysis_app_contract() ->
     AppPath = code:where_is_file("ldoc.app"),
