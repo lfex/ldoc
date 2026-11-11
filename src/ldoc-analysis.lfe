@@ -41,7 +41,7 @@
 (defun validate-options (options)
   (cond
     ((andalso (is_map options) (=:= (maps:size options) 0))
-     `#(ok 'none))
+     '#(ok none))
     ((andalso (is_map options)
               (=:= (maps:size options) 1)
               (maps:is_key 'source_root options))

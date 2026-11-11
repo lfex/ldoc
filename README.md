@@ -77,7 +77,7 @@ Only recorded source-file provenance beneath that root can produce a
 relative path and a known positive line. This is lexical projection: it does
 not inspect the filesystem, resolve symlinks, verify file existence, or
 authenticate the caller's declaration. It never infers a source from a BEAM
-or sidecar path, and it leaves path-like prose unchanged. Arc03 can define
+or sidecar path, and it leaves path-like prose unchanged. Arc 03 can define
 target links from these relative references.
 
 An LFE consumer can traverse the native view without reading collector or

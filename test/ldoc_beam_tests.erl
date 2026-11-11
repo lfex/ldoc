@@ -1298,6 +1298,10 @@ analysis_s01_s05(Temp, StoreRoot, Inputs, Docset1, Docset2) ->
                  maps:get(doc, view_definition(
                                 PathView, <<"lfe">>, <<"ldoc-fixture">>,
                                 <<"function">>, <<"sample">>, 1))),
+    {ok, PostViewRetrieved1} = 'ldoc-store':get(StoreRoot, Release1),
+    {ok, PostViewRetrieved2} = 'ldoc-store':get(StoreRoot, Release2),
+    ?assertEqual(Docset1, PostViewRetrieved1),
+    ?assertEqual(Docset2, PostViewRetrieved2),
     {ok, _} = 'ldoc-docset':assemble(maps:get(release, Retrieved1), Inputs),
     ok.
 
@@ -1465,19 +1469,20 @@ analysis_sources(Temp, Docset, DefaultView) ->
                      view_module(Sourced, <<"erlang">>,
                                  <<"ldoc_classic">>))))),
     Modern = view_module(Sourced, <<"erlang">>, <<"ldoc_modern">>),
-    ?assertEqual(<<"ldoc_modern.erl">>,
-                 maps:get(path, maps:get(source, Modern))),
+    ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 1},
+                 maps:get(source, Modern)),
     ModernShow = view_definition(Sourced, <<"erlang">>, <<"ldoc_modern">>,
                                  <<"function">>, <<"show">>, 1),
-    ?assertEqual(<<"ldoc_modern.erl">>,
-                 maps:get(path, maps:get(source, ModernShow))),
-    ?assert(maps:get(line, maps:get(source, ModernShow)) > 0),
+    ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 14},
+                 maps:get(source, ModernShow)),
     Classic = view_module(Sourced, <<"erlang">>, <<"ldoc_classic">>),
-    ?assert(maps:get(line, maps:get(source, Classic)) > 0),
+    ?assertEqual(#{path => <<"ldoc_classic.erl">>, line => 2},
+                 maps:get(source, Classic)),
     ClassicShow = view_definition(Sourced, <<"erlang">>,
                                   <<"ldoc_classic">>, <<"function">>,
                                   <<"show">>, 1),
-    ?assert(maps:get(line, maps:get(source, ClassicShow)) > 0),
+    ?assertEqual(#{path => <<"ldoc_classic.erl">>, line => 7},
+                 maps:get(source, ClassicShow)),
     lists:foreach(
       fun(Module) ->
           ?assertNot(maps:is_key(source, Module)),
@@ -1585,6 +1590,30 @@ analysis_sources(Temp, Docset, DefaultView) ->
     ?assertNot(maps:is_key(source,
                            view_module(NullPathView, <<"lfe">>,
                                        <<"ldoc-fixture">>))),
+    NullListFilename = binary_to_list(NullFilename),
+    NullListDocset = map_entry(
+                       fun(Entry) ->
+                           Entry#{metadata := #{source_anno =>
+                               erl_anno:set_file(NullListFilename,
+                                                 erl_anno:new(37))}}
+                       end,
+                       update_module(
+                         fun(Module) ->
+                             Module#{metadata :=
+                                         #{source_path => NullListFilename},
+                                     source := malformed}
+                         end, Docset, <<"ldoc-fixture">>),
+                       <<"ldoc-fixture">>, <<"function">>,
+                       <<"sample">>, 1),
+    {ok, NullListView} = 'ldoc-analysis':view(
+                           NullListDocset, #{source_root => Root}),
+    NullListModule = view_module(NullListView, <<"lfe">>,
+                                 <<"ldoc-fixture">>),
+    ?assertNot(maps:is_key(source, NullListModule)),
+    NullListDefinition = view_definition(NullListView, <<"lfe">>,
+                                        <<"ldoc-fixture">>,
+                                        <<"function">>, <<"sample">>, 1),
+    ?assertNot(maps:is_key(source, NullListDefinition)),
     ValidFallback = update_module(
                       fun(Module) ->
                           Module#{metadata :=
