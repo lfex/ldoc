@@ -116,6 +116,14 @@ Options are a map containing only:
   nonempty host and no userinfo, query, or fragment. An explicit port must be
   0 through 65535. Percent escapes must be complete hexadecimal triplets.
 
+The requested locale still selects documentation by exact key, then `und`,
+then the first key in lexical order. A selected body receives an HTML `lang`
+attribute only when the key matches LDOC's conservative subset: a two- or
+three-letter primary language, optionally followed by a four-letter script
+and a two-letter or three-digit region. The primary `und` is never annotated.
+Other valid UTF-8 keys still select and render their text without a `lang`
+attribute; this subset is not full BCP 47 validation.
+
 Example: export the returned bundle beneath a caller-selected directory and
 open the generated overview. The example's source URL is an explicit caller
 declaration, not a value inferred from the store or artifact paths.

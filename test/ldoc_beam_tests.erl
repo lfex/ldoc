@@ -1367,6 +1367,22 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
     ?assertEqual(1, length(binary:matches(LfeHtml, <<"id=\"api-filter\"">>))),
     ?assert(binary:match(LfeHtml, <<"<button class=\"menu-button\" data-menu-button hidden">>) =/= nomatch),
     ?assert(binary:match(LfeHtml, <<"id=\"api-filter\" class=\"filter\" data-filter hidden">>) =/= nomatch),
+    LegacyName = module_html_name(<<"lfe">>, <<"ldoc-legacy">>),
+    LegacyHtml = proplists:get_value(LegacyName, Bundle),
+    LegacyNative = module_named(maps:get(modules, Retrieved1), <<"ldoc-legacy">>),
+    LegacyPatterns = [Entry || Entry <- maps:get(entries, LegacyNative),
+                               maps:is_key(patterns, Entry)],
+    ?assertEqual(5, length(LegacyPatterns)),
+    lists:foreach(
+      fun(Entry) ->
+          NativePatterns = unicode:characters_to_binary(
+                             lfe_io:print1(maps:get(patterns, Entry)),
+                             utf8, utf8),
+          ExpectedPatterns = 'ldoc-markup':escape(NativePatterns),
+          ?assert(binary:match(LegacyHtml, ExpectedPatterns) =/= nomatch)
+      end, LegacyPatterns),
+    ?assert(binary:match(LegacyHtml, <<"is_atom">>) =/= nomatch),
+    ?assert(binary:match(LegacyHtml, <<"is_integer">>) =/= nomatch),
     AssetJs = proplists:get_value(<<"ldoc.js">>, Bundle),
     ?assert(binary:match(AssetJs, <<"const body">>) =/= nomatch),
     ?assertEqual(nomatch, binary:match(AssetJs, <<"var ">>)),
@@ -1382,17 +1398,39 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
                           <<"Documentation is hidden.">>),
     assert_html_doc_state(View1, #{},
                           <<"No documentation text is available.">>),
-    HiddenModuleView = html_hidden_module_view(View1),
-    {ok, HiddenModuleBundle} = 'ldoc-html':render(HiddenModuleView),
+    SecretDocset = map_entry(
+                     fun(Entry) -> Entry#{doc := #{<<"en">> =>
+                                                   <<"secret prose must stay private">>}}
+                     end,
+                     Retrieved1, <<"ldoc-fixture">>, <<"function">>,
+                     <<"sample">>, 1),
+    ?assertEqual(<<"secret prose must stay private">>,
+                 maps:get(<<"en">>, maps:get(doc,
+                     entry(maps:get(entries, module_named(
+                                             maps:get(modules, SecretDocset),
+                                             <<"ldoc-fixture">>)),
+                           <<"function">>, <<"sample">>, 1)))),
+    HiddenSecretDocset = update_module(
+                           fun(Module) -> Module#{doc := hidden} end,
+                           SecretDocset, <<"ldoc-fixture">>),
+    {ok, HiddenModuleView} = 'ldoc-analysis':view(
+                               HiddenSecretDocset,
+                               #{source_root => filename:absname(Temp)}),
+    {ok, HiddenModuleBundle} = 'ldoc-html':render(
+                                 HiddenModuleView,
+                                 #{source_base =>
+                                     <<"https://example.test/declared/">>}),
     HiddenModuleHtml = proplists:get_value(
                          module_html_name(<<"lfe">>, <<"ldoc-fixture">>),
                          HiddenModuleBundle),
     ?assert(binary:match(HiddenModuleHtml,
                          <<"Documentation is hidden.">>) =/= nomatch),
     ?assertEqual(nomatch, binary:match(HiddenModuleHtml,
-                                       <<"secret prose">>)),
+                                       <<"secret prose must stay private">>)),
     ?assertEqual(nomatch, binary:match(HiddenModuleHtml,
                                        <<"sample/1">>)),
+    ?assertEqual(nomatch, binary:match(HiddenModuleHtml,
+                                       <<"class=\"source\"">>)),
     {ok, Html0} = 'ldoc-markup':render(<<"text/markdown">>, <<"One **bold** and `code`.">>),
     ?assertEqual(<<"<p>One <strong>bold</strong> and <code>code</code>.</p>">>, Html0),
     {ok, HtmlEdoc} = 'ldoc-markup':render(<<"application/erlang+html">>,
@@ -1597,14 +1635,6 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
     ?assertEqual(nomatch, binary:match(GenuineLfeHtml,
                                        <<"class=\"source\"">>)),
     ?assertMatch({ok, _}, 'ldoc-html':render(View2)),
-    {ok, After1} = 'ldoc-store':get(StoreRoot, Release1),
-    {ok, After2} = 'ldoc-store':get(StoreRoot, Release2),
-    ?assertEqual(BeforeTerm1, {ok, After1}),
-    ?assertEqual(BeforeTerm2, {ok, After2}),
-    ?assertEqual(Docset1, After1),
-    ?assertEqual(Docset2, After2),
-    ?assertEqual(BeforeBytes1, file:read_file(store_path(StoreRoot, Release1))),
-    ?assertEqual(BeforeBytes2, file:read_file(store_path(StoreRoot, Release2))),
     RichView = html_rich_view(SourceView),
     {ok, RichBundle} = 'ldoc-html':render(
                          RichView,
@@ -1627,6 +1657,10 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
     ?assert(binary:match(RichModuleHtml, <<"<table>">>) =/= nomatch),
     ?assert(binary:match(RichModuleHtml, <<"<pre><code>">>) =/= nomatch),
     ?assert(binary:match(RichModuleHtml,
+                         <<"<pre class=\"signature\"><code>sample(Input)</code></pre>">>) =/= nomatch),
+    ?assert(binary:match(RichModuleHtml,
+                         <<"<pre class=\"signature\"><code>sample(Input, Options)\n    when is_integer(Options)</code></pre>">>) =/= nomatch),
+    ?assert(binary:match(RichModuleHtml,
                          <<"long_identifier_for_responsive_wrapping_and_navigation_filtering_0123456789">>) =/= nomatch),
     ?assertEqual(3, length(binary:matches(RichModuleHtml, <<"<tr>">>))),
     ?assert(binary:match(RichModuleHtml,
@@ -1638,6 +1672,48 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
                           UnclosedFenceBundle),
     ?assert(binary:match(UnclosedFenceHtml,
                          <<"unfinished\n</code></pre></div>">>) =/= nomatch),
+    LocaleCases = [
+        {<<"en">>, true},
+        {<<"en-US">>, true},
+        {<<"sr-Latn">>, true},
+        {<<"es-419">>, true},
+        {<<"zh-Hant-TW">>, true},
+        {<<"123">>, false},
+        {<<"-">>, false},
+        {<<"en--US">>, false},
+        {<<"en-">>, false},
+        {<<"-en">>, false},
+        {<<"arbitrary-key">>, false},
+        {<<"unknown">>, false},
+        {<<"und">>, false},
+        {<<"UND">>, false}],
+    lists:foreach(
+      fun({Locale, Annotated}) ->
+          LocaleView = html_sample_doc_view(
+                         View1,
+                         #{Locale => <<"Locale witness remains selected.">>}),
+          {ok, LocaleBundle} = 'ldoc-html':render(
+                                 LocaleView, #{locale => Locale}),
+          LocaleHtml = proplists:get_value(
+                         module_html_name(<<"lfe">>, <<"ldoc-fixture">>),
+                         LocaleBundle),
+          ?assert(binary:match(LocaleHtml,
+                               <<"Locale witness remains selected.">>) =/= nomatch),
+          LangAttribute = <<"lang=\"", Locale/binary, "\"">>,
+          case Annotated of
+              true -> ?assert(binary:match(LocaleHtml, LangAttribute) =/= nomatch);
+              false -> ?assertEqual(nomatch,
+                                    binary:match(LocaleHtml, LangAttribute))
+          end
+      end, LocaleCases),
+    {ok, After1} = 'ldoc-store':get(StoreRoot, Release1),
+    {ok, After2} = 'ldoc-store':get(StoreRoot, Release2),
+    ?assertEqual(BeforeTerm1, {ok, After1}),
+    ?assertEqual(BeforeTerm2, {ok, After2}),
+    ?assertEqual(Docset1, After1),
+    ?assertEqual(Docset2, After2),
+    ?assertEqual(BeforeBytes1, file:read_file(store_path(StoreRoot, Release1))),
+    ?assertEqual(BeforeBytes2, file:read_file(store_path(StoreRoot, Release2))),
     ok.
 
 html_section_ids(Html) ->
@@ -1674,14 +1750,6 @@ html_sample_doc_view(View, DocValue) ->
                  {<<"sample">>, 1} -> Definition#{doc := DocValue};
                  _ -> Definition
              end || Definition <- maps:get(definitions, Module)]}
-      end).
-
-html_hidden_module_view(View) ->
-    update_html_sample_module(
-      View,
-      fun(Module) ->
-          maps:without([source],
-                       Module#{doc := hidden, definitions := []})
       end).
 
 update_html_sample_module(View, Fun) ->
@@ -1848,7 +1916,7 @@ html_rich_view(View) ->
                     UpdatedDefinitions = [case {maps:get(name, Definition), maps:get(arity, Definition)} of
                         {<<"sample">>, 1} -> Definition#{
                             signatures := [<<"sample(Input)">>,
-                                           <<"sample(Input, Options)">>],
+                                           <<"sample(Input, Options)\n    when is_integer(Options)">>],
                             doc := #{<<"en">> =>
                             <<"# Rich original specimen\n\nThis first paragraph introduces a longer, original API narrative. It explains the input contract, the result shape, and the boundary between stored facts and the browser view.\n\nThis second paragraph gives the reader another continuous block of prose so the article width and line rhythm can be inspected at a realistic density.\n\n## A smaller heading\n\n- first item\n- second item\n\n> A quoted note with enough text to show the quote measure in context.\n\n| input | output |\n| --- | --- |\n| `a<b` | **safe** |\n| `count` | `3` |\n\n[reference](https://example.test/docs) and [rejected](javascript:alert(1)).\n\n```\n<sample input=\"safe\" />\n```\n\n<script>raw</script>">>}};
                         _ -> Definition
