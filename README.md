@@ -44,6 +44,59 @@ binary expressions are invalid snapshots. Maps containing the LFE struct
 marker key `__struct__` are retained as ordinary data using LFE's plain
 readable printer because the pretty-printer treats that key as struct syntax.
 
+## Build a native analysis view
+
+Retrieve the exact release, then project it through `ldoc-analysis:view/1`.
+The view groups languages, modules and candidate definitions while retaining
+the binary kind/name/arity identity and selected documentation as native
+terms. Overloads remain separate, and a classic macro keeps `unknown` arity.
+
+```erlang
+{ok, Docset} = 'ldoc-store':get(StoreRoot, Release),
+{ok, View} = 'ldoc-analysis':view(Docset).
+```
+
+The projection is a selected presentation boundary. It copies module name,
+format and documentation; definition kind, name, arity, signatures,
+documentation and producer patterns when present; plus optional relative
+source references. It excludes internal entries and suppresses definitions
+for hidden modules. Candidate entries with hidden documentation remain
+visible with that state. Structured EDoc bodies, signatures and classic
+patterns stay in native form. Opaque metadata, raw spec terms, annotations,
+carrier paths and arbitrary source data stay in the stored docset.
+
+Source references are absent by default. To include them, supply a declared
+absolute source root with `view/2`:
+
+```erlang
+{ok, ViewWithSources} =
+    'ldoc-analysis':view(Docset, #{source_root => SourceRoot}).
+```
+
+Only recorded source-file provenance beneath that root can produce a
+relative path and a known positive line. This is lexical projection: it does
+not inspect the filesystem, resolve symlinks, verify file existence, or
+authenticate the caller's declaration. It never infers a source from a BEAM
+or sidecar path, and it leaves path-like prose unchanged. Arc03 can define
+target links from these relative references.
+
+An LFE consumer can traverse the native view without reading collector or
+store internals:
+
+```erlang
+DefinitionIndex = maps:from_list([
+    {{Language, maps:get(name, Module), maps:get(kind, Definition),
+      maps:get(name, Definition), maps:get(arity, Definition)}, Definition}
+    || #{name := Language, modules := Modules} <- maps:get(languages, View),
+       Module <- Modules,
+       Definition <- maps:get(definitions, Module)]).
+```
+
+The store retains the complete producer record, including raw specs and
+annotations. This view exposes the producer's existing signature binaries;
+typed-spec presentation and JSON or other wire formats need a later,
+consumer-specific contract.
+
 ## Generate an EEP-48 sidecar with EDoc
 
 For a source-comment module, compile and run OTP EDoc as a caller step. Use a fresh trusted package or output directory so an old chunk cannot be mistaken for the current conversion. The package layout is `ebin/<module>.beam` beside `doc/chunks/<module>.chunk`.

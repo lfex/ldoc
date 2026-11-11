@@ -591,7 +591,8 @@ store_s01_s06(Temp, LfePath, ErlPath, Classic, LegacyPath) ->
     store_concurrency(Temp, Release1, Docset1),
     store_filesystem_failure(Temp, Root, Release1, Docset1),
     store_fresh_vm(Root, Release1, LfePath, ErlPath, EdocPath, LegacyPath),
-    store_source_guarantees(Root, Release1, Docset1).
+    store_source_guarantees(Root, Release1, Docset1),
+    analysis_s01_s05(Temp, Root, Inputs, Docset1, Docset2).
 
 store_producer_oracles(Root, Release, Docset) ->
     Modules = maps:get(modules, Docset),
@@ -1216,6 +1217,555 @@ store_source_guarantees(Root, Release, Docset) ->
                 end,
     ?assertEqual([], [Name || Name <- TempNames,
                               lists:prefix(".ldoc-", Name)]).
+
+analysis_s01_s05(Temp, StoreRoot, Inputs, Docset1, Docset2) ->
+    Release1 = maps:get(release, Docset1),
+    Release2 = maps:get(release, Docset2),
+    {ok, Retrieved1} = 'ldoc-store':get(StoreRoot, Release1),
+    {ok, Retrieved2} = 'ldoc-store':get(StoreRoot, Release2),
+    ?assertEqual(Docset1, Retrieved1),
+    ?assertEqual(Docset2, Retrieved2),
+    {ok, View1} = 'ldoc-analysis':view(Retrieved1),
+    {ok, View2} = 'ldoc-analysis':view(Retrieved2),
+    ?assertEqual([languages, release], lists:sort(maps:keys(View1))),
+    ?assertEqual([languages, release], lists:sort(maps:keys(View2))),
+    ?assertEqual([<<"erlang">>, <<"lfe">>],
+                 [maps:get(name, Language) ||
+                     Language <- maps:get(languages, View1)]),
+    ?assertEqual([<<"ldoc_classic">>, <<"ldoc_modern">>],
+                 [maps:get(name, Module) ||
+                     Module <- module_views(View1, <<"erlang">>)]),
+    ?assertEqual([<<"ldoc-fixture">>, <<"ldoc-legacy">>],
+                 [maps:get(name, Module) ||
+                     Module <- module_views(View1, <<"lfe">>)]),
+    analysis_app_contract(),
+    ?assertEqual(View1, element(2, 'ldoc-analysis':view(
+                                   Retrieved1#{modules :=
+                                       lists:reverse(maps:get(modules,
+                                                              Retrieved1))}))),
+    ReversedEntries = map_modules(
+                        fun(Module) ->
+                            Module#{entries := lists:reverse(
+                                                   maps:get(entries, Module))}
+                        end,
+                        Retrieved1),
+    ?assertEqual(View1, element(2, 'ldoc-analysis':view(ReversedEntries))),
+    Index = consumer_indexes([View1, View2]),
+    ?assertEqual(2, maps:size(Index)),
+    #{Release1 := Index1, Release2 := Index2} = Index,
+    ?assertEqual(Index1, Index2),
+    Definitions = maps:get(definitions, Index1),
+    ?assertEqual(14, maps:size(Definitions)),
+    ?assertEqual(2, maps:get(language_count, Index1)),
+    ?assertEqual(4, maps:get(module_count, Index1)),
+    LfeOne = {<<"lfe">>, <<"ldoc-fixture">>, <<"function">>,
+              <<"sample">>, 1},
+    LfeTwo = {<<"lfe">>, <<"ldoc-fixture">>, <<"function">>,
+              <<"sample">>, 2},
+    ?assert(maps:is_key(LfeOne, Definitions)),
+    ?assert(maps:is_key(LfeTwo, Definitions)),
+    ?assertNot(maps:is_key({<<"lfe">>, <<"ldoc-fixture">>,
+                            <<"function">>,
+                            <<"LFE-EXPAND-EXPORTED-MACRO">>, 3},
+                           Definitions)),
+    LegacyMacro = maps:get({<<"lfe">>, <<"ldoc-legacy">>, <<"macro">>,
+                            <<"show">>, unknown}, Definitions),
+    ?assertEqual([{[x], [[is_atom, x]]}, {[x], []}],
+                 maps:get(patterns, LegacyMacro)),
+    ?assertEqual([], maps:get(signatures, LegacyMacro)),
+    Classic = maps:get({<<"erlang">>, <<"ldoc_classic">>,
+                        <<"function">>, <<"show">>, 1}, Definitions),
+    ?assertEqual(#{<<"en">> => [{p, [], [<<"Show the input.">>]}]},
+                 maps:get(doc, Classic)),
+    ?assertEqual([<<"show(X)">>], maps:get(signatures, Classic)),
+    ModernHidden = maps:get({<<"erlang">>, <<"ldoc_modern">>,
+                             <<"function">>, <<"hidden">>, 0}, Definitions),
+    ?assertEqual(hidden, maps:get(doc, ModernHidden)),
+    assert_view_fields(View1),
+    analysis_kind_identity(Retrieved1),
+    analysis_doc_states(Retrieved1, View1),
+    analysis_sources(Temp, Retrieved1, View1),
+    analysis_invalid_inputs(Retrieved1),
+    PathText = <<"Read /tmp/example.erl before continuing.">>,
+    PathDocset = map_entry(
+                   fun(Entry) ->
+                       Entry#{doc := #{<<"en">> => PathText}}
+                   end,
+                   Retrieved1, <<"ldoc-fixture">>, <<"function">>,
+                   <<"sample">>, 1),
+    {ok, PathView} = 'ldoc-analysis':view(PathDocset),
+    ?assertEqual(#{<<"en">> => PathText},
+                 maps:get(doc, view_definition(
+                                PathView, <<"lfe">>, <<"ldoc-fixture">>,
+                                <<"function">>, <<"sample">>, 1))),
+    {ok, _} = 'ldoc-docset':assemble(maps:get(release, Retrieved1), Inputs),
+    ok.
+
+analysis_app_contract() ->
+    AppPath = code:where_is_file("ldoc.app"),
+    {ok, [{application, ldoc, Properties}]} = file:consult(AppPath),
+    Modules = proplists:get_value(modules, Properties),
+    ?assert(lists:member('ldoc-analysis', Modules)),
+    Applications = proplists:get_value(applications, Properties),
+    ?assert(lists:member(lfe, Applications)),
+    ?assert(lists:member(crypto, Applications)),
+    Exports = 'ldoc-analysis':module_info(exports),
+    PublicExports = lists:sort(
+                      [Export || Export = {Name, _Arity} <- Exports,
+                                 Name =/= '__info__',
+                                 Name =/= 'LFE-EXPAND-EXPORTED-MACRO',
+                                 Name =/= module_info]),
+    ?assertEqual([{view, 1}, {view, 2}], PublicExports),
+    ok.
+
+consumer_indexes(Views) ->
+    maps:from_list([{maps:get(release, View), consumer_index(View)} ||
+                       View <- Views]).
+
+consumer_index(View) ->
+    Languages = maps:get(languages, View),
+    Definitions = lists:foldl(
+                    fun(#{name := Language, modules := Modules}, Acc0) ->
+                        lists:foldl(
+                          fun(#{name := ModuleName,
+                                definitions := Public}, Acc1) ->
+                              lists:foldl(
+                                fun(Definition, Acc2) ->
+                                    Key = {Language, ModuleName,
+                                           maps:get(kind, Definition),
+                                           maps:get(name, Definition),
+                                           maps:get(arity, Definition)},
+                                    maps:put(Key, Definition, Acc2)
+                                end, Acc1, Public)
+                          end, Acc0, Modules)
+                    end, #{}, Languages),
+    #{language_count => length(Languages),
+      module_count => lists:sum([length(maps:get(modules, Language)) ||
+                                    Language <- Languages]),
+      definitions => Definitions}.
+
+assert_view_fields(View) ->
+    LanguageNames = [maps:get(name, Language) ||
+                       Language <- maps:get(languages, View)],
+    ?assertEqual(lists:sort(LanguageNames), LanguageNames),
+    lists:foreach(
+      fun(Language) ->
+          ?assertEqual([modules, name], lists:sort(maps:keys(Language))),
+          ModuleNames = [maps:get(name, Module) ||
+                           Module <- maps:get(modules, Language)],
+          ?assertEqual(lists:sort(ModuleNames), ModuleNames),
+          lists:foreach(
+            fun(Module) ->
+                ?assertEqual([definitions, doc, format, name],
+                             lists:sort(maps:keys(Module))),
+                DefinitionKeys = [
+                                   {maps:get(kind, Definition),
+                                    maps:get(name, Definition),
+                                    maps:get(arity, Definition)} ||
+                                     Definition <- maps:get(definitions,
+                                                            Module)],
+                ?assertEqual(lists:sort(DefinitionKeys), DefinitionKeys),
+                lists:foreach(
+                  fun(Definition) ->
+                      Keys = lists:sort(maps:keys(Definition)),
+                      ?assert(lists:member(Keys,
+                                           [[arity, doc, kind, name,
+                                             signatures],
+                                            [arity, doc, kind, name,
+                                             patterns, signatures]]))
+                  end, maps:get(definitions, Module))
+            end, maps:get(modules, Language))
+      end, maps:get(languages, View)),
+    ok.
+
+analysis_doc_states(Docset, View) ->
+    NoneModuleDocset = update_module(
+                         fun(Module) -> Module#{doc := none} end,
+                         Docset, <<"ldoc-fixture">>),
+    {ok, NoneModuleView} = 'ldoc-analysis':view(NoneModuleDocset),
+    ?assertEqual(none, maps:get(doc, view_module(
+                                    NoneModuleView, <<"lfe">>,
+                                    <<"ldoc-fixture">>))),
+    EmptyModuleDocset = update_module(
+                          fun(Module) -> Module#{doc := #{}} end,
+                          Docset, <<"ldoc-fixture">>),
+    {ok, EmptyModuleView} = 'ldoc-analysis':view(EmptyModuleDocset),
+    ?assertEqual(#{}, maps:get(doc, view_module(
+                                     EmptyModuleView, <<"lfe">>,
+                                     <<"ldoc-fixture">>))),
+    ?assertEqual(#{<<"en">> => <<"Fixture module.">>},
+                 maps:get(doc, view_module(View, <<"lfe">>,
+                                          <<"ldoc-fixture">>))),
+    EmptyDocset = map_entry(fun(Entry) -> Entry#{doc := #{}} end,
+                            Docset, <<"ldoc-fixture">>,
+                            <<"function">>, <<"bare">>, 0),
+    {ok, EmptyView} = 'ldoc-analysis':view(EmptyDocset),
+    ?assertEqual(#{}, maps:get(doc, view_definition(
+                                     EmptyView, <<"lfe">>,
+                                     <<"ldoc-fixture">>, <<"function">>,
+                                     <<"bare">>, 0))),
+    SecretText = <<"secret prose">>,
+    HiddenModuleDocset = update_module(
+                           fun(Module) -> Module#{doc := hidden} end,
+                           map_entry(
+                             fun(Entry) ->
+                                 Entry#{doc := #{<<"en">> => SecretText}}
+                             end, Docset, <<"ldoc-fixture">>,
+                             <<"function">>, <<"sample">>, 1),
+                           <<"ldoc-fixture">>),
+    {ok, HiddenView} = 'ldoc-analysis':view(HiddenModuleDocset),
+    HiddenModule = view_module(HiddenView, <<"lfe">>,
+                               <<"ldoc-fixture">>),
+    ?assertEqual(hidden, maps:get(doc, HiddenModule)),
+    ?assertEqual([], maps:get(definitions, HiddenModule)),
+    ?assertNot(maps:is_key(source, HiddenModule)),
+    HiddenStored = module_named(maps:get(modules, HiddenModuleDocset),
+                                <<"ldoc-fixture">>),
+    ?assertEqual(#{<<"en">> => SecretText},
+                 entry_doc(maps:get(entries, HiddenStored), <<"function">>,
+                           <<"sample">>, 1)),
+    ?assertEqual(#{<<"en">> => <<"Get a value.">>},
+                 maps:get(doc, view_definition(
+                                View, <<"erlang">>, <<"ldoc_modern">>,
+                                <<"callback">>, <<"get">>, 0))),
+    ok.
+
+analysis_kind_identity(Docset) ->
+    Module = module_named(maps:get(modules, Docset), <<"ldoc_modern">>),
+    Type = entry(maps:get(entries, Module), <<"type">>, <<"value">>, 0),
+    Function = Type#{kind := <<"function">>, doc := none, signatures := []},
+    Variant = update_module(
+                fun(Current) ->
+                    Current#{entries := [Function | maps:get(entries, Current)]}
+                end, Docset, <<"ldoc_modern">>),
+    {ok, VariantView} = 'ldoc-analysis':view(Variant),
+    VariantIndex = consumer_index(VariantView),
+    Definitions = maps:get(definitions, VariantIndex),
+    FunctionKey = {<<"erlang">>, <<"ldoc_modern">>, <<"function">>,
+                   <<"value">>, 0},
+    TypeKey = {<<"erlang">>, <<"ldoc_modern">>, <<"type">>,
+               <<"value">>, 0},
+    ?assert(maps:is_key(FunctionKey, Definitions)),
+    ?assert(maps:is_key(TypeKey, Definitions)),
+    ?assertNotEqual(maps:get(FunctionKey, Definitions),
+                    maps:get(TypeKey, Definitions)),
+    ok.
+
+analysis_sources(Temp, Docset, DefaultView) ->
+    Root = filename:absname(Temp),
+    {ok, Sourced} = 'ldoc-analysis':view(Docset, #{source_root => Root}),
+    ?assertEqual(Sourced,
+                 element(2, 'ldoc-analysis':view(
+                              Docset, #{source_root => list_to_binary(Root)}))),
+    ?assertEqual(<<"ldoc_classic.erl">>,
+                 maps:get(path, maps:get(source,
+                     view_module(Sourced, <<"erlang">>,
+                                 <<"ldoc_classic">>)))),
+    ?assert(is_binary(maps:get(path, maps:get(source,
+                     view_module(Sourced, <<"erlang">>,
+                                 <<"ldoc_classic">>))))),
+    Modern = view_module(Sourced, <<"erlang">>, <<"ldoc_modern">>),
+    ?assertEqual(<<"ldoc_modern.erl">>,
+                 maps:get(path, maps:get(source, Modern))),
+    ModernShow = view_definition(Sourced, <<"erlang">>, <<"ldoc_modern">>,
+                                 <<"function">>, <<"show">>, 1),
+    ?assertEqual(<<"ldoc_modern.erl">>,
+                 maps:get(path, maps:get(source, ModernShow))),
+    ?assert(maps:get(line, maps:get(source, ModernShow)) > 0),
+    Classic = view_module(Sourced, <<"erlang">>, <<"ldoc_classic">>),
+    ?assert(maps:get(line, maps:get(source, Classic)) > 0),
+    ClassicShow = view_definition(Sourced, <<"erlang">>,
+                                  <<"ldoc_classic">>, <<"function">>,
+                                  <<"show">>, 1),
+    ?assert(maps:get(line, maps:get(source, ClassicShow)) > 0),
+    lists:foreach(
+      fun(Module) ->
+          ?assertNot(maps:is_key(source, Module)),
+          lists:foreach(fun(Definition) ->
+                            ?assertNot(maps:is_key(source, Definition))
+                        end, maps:get(definitions, Module))
+      end, module_views(Sourced, <<"lfe">>)),
+    assert_source_fields(Sourced),
+    ?assertEqual(false, any_source_field(DefaultView)),
+    Sibling = Root ++ "-other/source.erl",
+    OutsideDocset = update_module(
+                      fun(Module) ->
+                          Module#{metadata := #{source_path => Sibling}}
+                      end, Docset, <<"ldoc-fixture">>),
+    {ok, OutsideView} = 'ldoc-analysis':view(
+                          OutsideDocset, #{source_root => Root}),
+    ?assertNot(maps:is_key(source,
+                           view_module(OutsideView, <<"lfe">>,
+                                       <<"ldoc-fixture">>))),
+    Traversal = filename:join([Root, "..", "escape", "source.erl"]),
+    TraversalDocset = update_module(
+                        fun(Module) ->
+                            Module#{metadata := #{source_path => Traversal}}
+                        end, Docset, <<"ldoc-fixture">>),
+    {ok, TraversalView} = 'ldoc-analysis':view(
+                            TraversalDocset, #{source_root => Root}),
+    ?assertNot(maps:is_key(source,
+                           view_module(TraversalView, <<"lfe">>,
+                                       <<"ldoc-fixture">>))),
+    RelativeEntry = map_entry(
+                      fun(Entry) ->
+                          Entry#{annotation :=
+                                     erl_anno:set_file("dir/show.erl",
+                                                       erl_anno:new(23))}
+                      end,
+                      update_module(
+                        fun(Module) ->
+                            Module#{metadata :=
+                                        #{source_path => filename:join(
+                                                             [Root, "src",
+                                                              "module.erl"])}}
+                        end, Docset, <<"ldoc-fixture">>),
+                      <<"ldoc-fixture">>, <<"function">>, <<"sample">>, 1),
+    {ok, RelativeView} = 'ldoc-analysis':view(
+                           RelativeEntry, #{source_root => Root}),
+    RelativeDefinition = view_definition(RelativeView, <<"lfe">>,
+                                         <<"ldoc-fixture">>,
+                                         <<"function">>, <<"sample">>, 1),
+    ?assertNot(maps:is_key(source, RelativeDefinition)),
+    BasenameEntry = map_entry(
+                      fun(Entry) ->
+                          Entry#{annotation :=
+                                     erl_anno:set_file("module.erl",
+                                                       erl_anno:new(24))}
+                      end,
+                      update_module(
+                        fun(Module) ->
+                            Module#{metadata :=
+                                        #{source_path => filename:join(
+                                                             [Root, "src",
+                                                              "module.erl"])}}
+                        end, Docset, <<"ldoc-fixture">>),
+                      <<"ldoc-fixture">>, <<"function">>, <<"sample">>, 1),
+    {ok, BasenameView} = 'ldoc-analysis':view(
+                           BasenameEntry, #{source_root => Root}),
+    BasenameDefinition = view_definition(BasenameView, <<"lfe">>,
+                                          <<"ldoc-fixture">>,
+                                          <<"function">>, <<"sample">>, 1),
+    ?assertEqual(<<"src/module.erl">>,
+                 maps:get(path, maps:get(source, BasenameDefinition))),
+    ?assertEqual(24, maps:get(line, maps:get(source, BasenameDefinition))),
+    ExplicitPath = filename:join([Root, "src", "explicit.erl"]),
+    Explicit = map_entry(
+                 fun(Entry) ->
+                     Metadata = maps:get(metadata, Entry, #{}),
+                     Entry#{metadata := Metadata#{source_anno =>
+                         erl_anno:set_file(ExplicitPath,
+                                           erl_anno:new(71))}}
+                 end,
+                 update_module(
+                   fun(Module) ->
+                       Module#{metadata := #{source_path => filename:join(
+                                                            [Root, "src",
+                                                             "module.erl"])}}
+                   end, Docset, <<"ldoc-fixture">>),
+                 <<"ldoc-fixture">>, <<"function">>, <<"sample">>, 1),
+    {ok, ExplicitView} = 'ldoc-analysis':view(
+                           Explicit, #{source_root => Root}),
+    ExplicitDefinition = view_definition(ExplicitView, <<"lfe">>,
+                                         <<"ldoc-fixture">>,
+                                         <<"function">>, <<"sample">>, 1),
+    ?assertEqual(<<"src/explicit.erl">>,
+                 maps:get(path, maps:get(source, ExplicitDefinition))),
+    ?assert(is_binary(maps:get(path, maps:get(source, ExplicitDefinition)))),
+    ?assertEqual(71, maps:get(line, maps:get(source, ExplicitDefinition))),
+    RootBinary = list_to_binary(Root),
+    NullFilename = <<RootBinary/binary, "/src/bad", 0, ".erl">>,
+    NullPathDocset = update_module(
+                       fun(Module) ->
+                           Module#{metadata := #{source_path => NullFilename},
+                                   source := malformed}
+                       end, Docset, <<"ldoc-fixture">>),
+    {ok, NullPathView} = 'ldoc-analysis':view(
+                           NullPathDocset, #{source_root => Root}),
+    ?assertNot(maps:is_key(source,
+                           view_module(NullPathView, <<"lfe">>,
+                                       <<"ldoc-fixture">>))),
+    ValidFallback = update_module(
+                      fun(Module) ->
+                          Module#{metadata :=
+                                      #{source_path => filename:join(
+                                                           [Root, "src",
+                                                            "fallback.erl"])},
+                                  source := malformed}
+                      end, Docset, <<"ldoc-fixture">>),
+    {ok, FallbackView} = 'ldoc-analysis':view(
+                           ValidFallback, #{source_root => Root}),
+    ?assertEqual(<<"src/fallback.erl">>,
+                 maps:get(path, maps:get(source,
+                     view_module(FallbackView, <<"lfe">>,
+                                 <<"ldoc-fixture">>)))),
+    AnnotationFallback = update_module(
+                           fun(Module) ->
+                               Module#{metadata := malformed,
+                                       source := malformed,
+                                       annotation := erl_anno:set_file(
+                                         filename:join([Root, "src",
+                                                        "annotation.erl"]),
+                                         erl_anno:new(5))}
+                           end, Docset, <<"ldoc-fixture">>),
+    {ok, AnnotationFallbackView} = 'ldoc-analysis':view(
+                                     AnnotationFallback,
+                                     #{source_root => Root}),
+    ?assertEqual(<<"src/annotation.erl">>,
+                 maps:get(path, maps:get(source,
+                     view_module(AnnotationFallbackView, <<"lfe">>,
+                                 <<"ldoc-fixture">>)))),
+    NoProvenance = update_module(
+                     fun(Module) ->
+                         Module#{metadata := malformed,
+                                 source := malformed,
+                                 annotation := malformed}
+                     end, Docset, <<"ldoc-fixture">>),
+    {ok, NoProvenanceView} = 'ldoc-analysis':view(
+                               NoProvenance, #{source_root => Root}),
+    ?assertNot(maps:is_key(source,
+                           view_module(NoProvenanceView, <<"lfe">>,
+                                       <<"ldoc-fixture">>))),
+    BadEntryMetadata = map_entry(
+                         fun(Entry) ->
+                             Entry#{metadata := malformed,
+                                    annotation := erl_anno:set_file(
+                                      filename:join([Root, "src",
+                                                     "entry-fallback.erl"]),
+                                      erl_anno:new(9))}
+                         end, Docset, <<"ldoc-fixture">>, <<"function">>,
+                         <<"sample">>, 1),
+    {ok, BadEntryMetadataView} = 'ldoc-analysis':view(
+                                   BadEntryMetadata,
+                                   #{source_root => Root}),
+    ?assertEqual(<<"src/entry-fallback.erl">>,
+                 maps:get(path, maps:get(source,
+                     view_definition(BadEntryMetadataView, <<"lfe">>,
+                                     <<"ldoc-fixture">>, <<"function">>,
+                                     <<"sample">>, 1)))),
+    ok.
+
+analysis_invalid_inputs(Docset) ->
+    ?assertEqual({error, invalid_options},
+                 'ldoc-analysis':view(#{}, #{bad => true})),
+    ?assertEqual({error, invalid_options},
+                 'ldoc-analysis':view(Docset, #{source_root => "relative"})),
+    ?assertEqual({error, invalid_options},
+                 'ldoc-analysis':view(Docset, #{source_root => <<255>>})),
+    ?assertEqual({error, invalid_options},
+                 'ldoc-analysis':view(Docset,
+                                      #{source_root => <<"/tmp/ldoc", 0,
+                                                        "/root">>})),
+    ?assertEqual({error, invalid_options},
+                 'ldoc-analysis':view(Docset,
+                                      #{source_root => "/tmp/ldoc" ++ [0] ++
+                                                       "/root"})),
+    ?assertEqual({error, invalid_docset},
+                 'ldoc-analysis':view(#{release => #{}, modules => []})),
+    ?assertEqual({error, invalid_docset},
+                 'ldoc-analysis':view(Docset#{modules := []})),
+    [FirstModule | _] = maps:get(modules, Docset),
+    ?assertEqual({error, invalid_docset},
+                 'ldoc-analysis':view(Docset#{modules :=
+                                                  [FirstModule | improper]})),
+    ?assertEqual({error, invalid_docset},
+                 'ldoc-analysis':view(Docset#{modules :=
+                                                  [FirstModule, FirstModule]})),
+    [FirstEntry | _] = maps:get(entries, FirstModule),
+    BadEntries = FirstModule#{entries := [FirstEntry | improper]},
+    ?assertEqual({error, invalid_docset},
+                 'ldoc-analysis':view(replace_first_module(
+                                         Docset, BadEntries))),
+    DuplicateEntry = FirstModule#{entries := [FirstEntry, FirstEntry]},
+    ?assertEqual({error, invalid_docset},
+                 'ldoc-analysis':view(replace_first_module(
+                                         Docset, DuplicateEntry))),
+    BadSignatures = FirstEntry#{signatures := [<<"ok">> | improper]},
+    BadModule = FirstModule#{entries := [BadSignatures |
+                                          tl(maps:get(entries, FirstModule))]},
+    ?assertEqual({error, invalid_docset},
+                 'ldoc-analysis':view(replace_first_module(Docset, BadModule))),
+    ok.
+
+map_modules(Fun, Docset) ->
+    Docset#{modules := [Fun(Module) || Module <- maps:get(modules, Docset)]}.
+
+map_entry(Fun, Docset, ModuleName, Kind, Name, Arity) ->
+    update_module(
+      fun(Module) ->
+          Entries = [case {maps:get(kind, Entry), maps:get(name, Entry),
+                          maps:get(arity, Entry)} of
+                         {Kind, Name, Arity} -> Fun(Entry);
+                         _ -> Entry
+                     end || Entry <- maps:get(entries, Module)],
+          Module#{entries := Entries}
+      end, Docset, ModuleName).
+
+update_module(Fun, Docset, ModuleName) ->
+    map_modules(fun(Module) ->
+                    case maps:get(name, Module) of
+                        ModuleName -> Fun(Module);
+                        _ -> Module
+                    end
+                end, Docset).
+
+replace_first_module(Docset, Replacement) ->
+    [_ | Tail] = maps:get(modules, Docset),
+    Docset#{modules := [Replacement | Tail]}.
+
+module_views(View, Language) ->
+    [Modules] = [maps:get(modules, Group) || Group <- maps:get(languages, View),
+                 maps:get(name, Group) =:= Language],
+    Modules.
+
+view_module(View, Language, Name) ->
+    [Module] = [M || M <- module_views(View, Language),
+                     maps:get(name, M) =:= Name],
+    Module.
+
+view_definition(View, Language, ModuleName, Kind, Name, Arity) ->
+    Module = view_module(View, Language, ModuleName),
+    [Definition] = [D || D <- maps:get(definitions, Module),
+                         maps:get(kind, D) =:= Kind,
+                         maps:get(name, D) =:= Name,
+                         maps:get(arity, D) =:= Arity],
+    Definition.
+
+any_source_field(View) ->
+    lists:any(fun(Group) ->
+                  lists:any(fun(Module) ->
+                                maps:is_key(source, Module) orelse
+                                lists:any(fun(Definition) ->
+                                              maps:is_key(source, Definition)
+                                          end,
+                                          maps:get(definitions, Module))
+                            end, maps:get(modules, Group))
+              end, maps:get(languages, View)).
+
+assert_source_fields(View) ->
+    lists:foreach(
+      fun(Group) ->
+          lists:foreach(
+            fun(Module) ->
+                assert_source_map(maps:get(source, Module, none)),
+                lists:foreach(fun(Definition) ->
+                                  assert_source_map(
+                                    maps:get(source, Definition, none))
+                              end, maps:get(definitions, Module))
+            end, maps:get(modules, Group))
+      end, maps:get(languages, View)),
+    ok.
+
+assert_source_map(none) ->
+    ok;
+assert_source_map(Source) ->
+    Keys = lists:sort(maps:keys(Source)),
+    ?assert(lists:member(Keys, [[path], [line, path]])),
+    Path = maps:get(path, Source),
+    ?assert(is_binary(Path)),
+    ?assertEqual(relative, filename:pathtype(Path)),
+    ?assertNotEqual(<<>>, Path),
+    ok.
 
 module_named(Modules, Name) ->
     [Module] = [M || M <- Modules, maps:get(name, M) =:= Name],
