@@ -173,6 +173,65 @@ Raw typed specs and annotations remain in storage and are not presented as
 inferred types by this API; signatures and classic patterns are the selected
 native view's documented presentation fields.
 
+## Build a versioned local site
+
+`ldoc-site:build/3` composes exact stored releases through the public store,
+analysis-view, and HTML-renderer APIs. Supply a nonempty proper list of
+release specifications. Each map has a required exact `release` key and may
+include `overview`, `source_root`, and `source_base`. Release keys are not
+normalized or semver-sorted; the catalogue groups exact namespace/package
+coordinates and lists their exact versions bytewise. The optional fourth
+argument accepts only `locale`. Every release is prepared before the builder
+claims or changes the output directory.
+
+```erlang
+Release1 = #{namespace => <<"local">>, package => <<"my_app">>,
+             version => <<"1.2.0">>},
+Release2 = Release1#{version := <<"1.3.0">>},
+StoreRoot = "/var/tmp/ldoc-snapshots",
+Target = "/var/tmp/my_app-reference",
+Specs = [#{release => Release1,
+           overview => <<"# My application\n\nBrowse the exact API release.">>,
+           source_root => "/work/my_app",
+           source_base => <<"https://example.test/my_app/">>},
+         #{release => Release2}],
+{ok, IndexPath} = 'ldoc-site':build(StoreRoot, Specs, Target),
+%% Or select a locale for every release:
+{ok, OtherIndexPath} = 'ldoc-site':build(StoreRoot, Specs,
+                                          "/var/tmp/my_app-reference-fr",
+                                          #{locale => <<"fr">>}).
+```
+
+Open the returned `IndexPath` in a browser, or serve its containing directory
+with an ordinary local static server. The catalogue has direct keyboard- and
+no-script-friendly links to each exact release. Within a release, each page's
+visible version link returns to the catalogue. `source_root` and
+`source_base` remain caller declarations; a source link appears only for a
+relative reference selected by the public analysis view beneath that root.
+The builder does not infer a host, revision, or source target.
+
+The target must not already exist, and its parent must already be a directory.
+The caller provides a stable trusted parent; the builder does not resolve
+symlinked ancestors or defend a parent another process can replace while the
+build runs. A build that loses an exclusive target claim returns
+`{error, output_exists}` without changing the winner. Other validation errors
+are returned in this order: `invalid_options`, `invalid_store_root`,
+`invalid_target`, `invalid_releases`, then `{duplicate_release, Release}`.
+After validation, a read/render error is tagged with the exact release and
+stage. Parent, directory creation, open, write, and close errors identify the
+operation and path. A failed owned build removes its new tree where possible;
+cleanup failure is reported with the original operation error. Unexpected
+exceptions are re-raised after closing the current descriptor and attempting
+owned-tree cleanup.
+
+The generated site is for local browsing after a successful return. It is not
+an atomic multi-file publication or a power-loss durability guarantee. An
+interrupted process may leave an incomplete owned target for its caller to
+inspect and remove. Only generated release routes use bounded SHA-256
+identities; no release label becomes a filesystem path. The previous
+single-release `ldoc-html:render/1,2` API remains in-memory and keeps its
+original header bytes unless its explicit `version_index` option is true.
+
 The independently authored layout takes measured page organization cues from
 cljdoc's Reitit 0.11.0 reference and the inspected upstream source at
 `74d0cec6bd252321375b68ee3facb8ae8faf3296` (EPL-2.0). LDOC uses no copied

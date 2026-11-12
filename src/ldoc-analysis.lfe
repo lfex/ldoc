@@ -3,7 +3,8 @@
 (defmodule ldoc-analysis
   (export
    (view 1)
-   (view 2)))
+   (view 2)
+   (valid-options? 1)))
 
 (defspec (view 1)
   ([(map)]
@@ -14,6 +15,15 @@
   ([(map) (map)]
    (UNION (tuple 'ok (map))
           (tuple 'error (UNION 'invalid_options 'invalid_docset)))))
+
+(defspec (valid-options? 1)
+  ([(term)] 'boolean))
+
+(defun valid-options? (options)
+  "Return whether OPTIONS would be accepted by view/2."
+  (case (validate-options options)
+    (`#(ok ,_) 'true)
+    (_ 'false)))
 
 (defun view (docset)
   "Return the public native analysis view of DOCSET.

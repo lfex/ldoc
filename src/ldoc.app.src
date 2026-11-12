@@ -13,4 +13,5 @@
              'ldoc-html-assets',
              'ldoc-legacy',
              'ldoc-markup',
+             'ldoc-site',
              'ldoc-store']}]}.

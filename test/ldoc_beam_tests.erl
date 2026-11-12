@@ -1287,6 +1287,7 @@ analysis_s01_s05(Temp, StoreRoot, Inputs, Docset1, Docset2) ->
     analysis_sources(Temp, Retrieved1, View1),
     html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
                  Retrieved1, Retrieved2, View1, View2),
+    site_s01_s06(Temp, StoreRoot, Retrieved1, Retrieved2, View1, View2),
     analysis_invalid_inputs(Retrieved1),
     PathText = <<"Read /tmp/example.erl before continuing.">>,
     PathDocset = map_entry(
@@ -1949,8 +1950,338 @@ analysis_app_contract() ->
                                  Name =/= '__info__',
                                  Name =/= 'LFE-EXPAND-EXPORTED-MACRO',
                                  Name =/= module_info]),
-    ?assertEqual([{view, 1}, {view, 2}], PublicExports),
+    ?assertEqual([{'valid-options?', 1}, {view, 1}, {view, 2}], PublicExports),
+    HtmlExports = 'ldoc-html':module_info(exports),
+    HtmlPublicExports = lists:sort(
+                          [Export || Export = {Name, _Arity} <- HtmlExports,
+                                     Name =/= '__info__',
+                                     Name =/= 'LFE-EXPAND-EXPORTED-MACRO',
+                                     Name =/= module_info]),
+    ?assertEqual([{render, 1}, {render, 2}, {'valid-options?', 1}],
+                 HtmlPublicExports),
+    ?assert(lists:member('ldoc-site', Modules)),
+    SiteExports = 'ldoc-site':module_info(exports),
+    SitePublicExports = lists:sort(
+                          [Export || Export = {Name, _Arity} <- SiteExports,
+                                     Name =/= '__info__',
+                                     Name =/= 'LFE-EXPAND-EXPORTED-MACRO',
+                                     Name =/= module_info]),
+    ?assertEqual([{build, 3}, {build, 4}], SitePublicExports),
     ok.
+
+site_s01_s06(Temp, StoreRoot, Retrieved1, Retrieved2, View1, View2) ->
+    Release1 = maps:get(release, Retrieved1),
+    Release2 = maps:get(release, Retrieved2),
+    Route1 = site_release_route(Release1),
+    Route2 = site_release_route(Release2),
+    ?assertNotEqual(Route1, Route2),
+    Before1 = 'ldoc-store':get(StoreRoot, Release1),
+    Before2 = 'ldoc-store':get(StoreRoot, Release2),
+    BeforeBytes1 = file:read_file(store_path(StoreRoot, Release1)),
+    BeforeBytes2 = file:read_file(store_path(StoreRoot, Release2)),
+    Spec1 = #{release => Release1,
+              overview => <<"# First exact release\n\nOriginal catalogue prose.">>,
+              source_root => filename:absname(Temp),
+              source_base => <<"https://example.test/source/">>},
+    Spec2 = #{release => Release2,
+              overview => <<"# Second exact release\n\nSeparate release text.">>},
+    ForwardTarget = filename:join(Temp, "site-forward"),
+    ReverseTarget = filename:join(Temp, "site-reverse"),
+    {ok, ForwardIndex} = 'ldoc-site':build(
+                           StoreRoot, [Spec2, Spec1], ForwardTarget),
+    {ok, ReverseIndex} = 'ldoc-site':build(
+                           StoreRoot, [Spec1, Spec2], ReverseTarget),
+    ?assertEqual(unicode:characters_to_binary(
+                   filename:join(ForwardTarget, "index.html")), ForwardIndex),
+    ?assertEqual(unicode:characters_to_binary(
+                   filename:join(ReverseTarget, "index.html")), ReverseIndex),
+    ForwardTree = site_tree_snapshot(ForwardTarget),
+    ReverseTree = site_tree_snapshot(ReverseTarget),
+    ?assertEqual(16, length(ForwardTree)),
+    ?assertEqual(ForwardTree, ReverseTree),
+    ForwardNames = [Name || {Name, _} <- ForwardTree],
+    ExpectedNames = lists:sort(
+                      [<<"index.html">>, <<"ldoc.css">>,
+                       <<Route1/binary, "/index.html">>,
+                       <<Route1/binary, "/ldoc.css">>,
+                       <<Route1/binary, "/ldoc.js">>,
+                       <<Route2/binary, "/index.html">>,
+                       <<Route2/binary, "/ldoc.css">>,
+                       <<Route2/binary, "/ldoc.js">>] ++
+                      [<<Route/binary, "/", (module_html_name(Language, Module))/binary>>
+                       || {Route, Language, Module} <-
+                            [{Route1, <<"erlang">>, <<"ldoc_classic">>},
+                             {Route1, <<"erlang">>, <<"ldoc_modern">>},
+                             {Route1, <<"lfe">>, <<"ldoc-fixture">>},
+                             {Route1, <<"lfe">>, <<"ldoc-legacy">>},
+                             {Route2, <<"erlang">>, <<"ldoc_classic">>},
+                             {Route2, <<"erlang">>, <<"ldoc_modern">>},
+                             {Route2, <<"lfe">>, <<"ldoc-fixture">>},
+                             {Route2, <<"lfe">>, <<"ldoc-legacy">>}]]),
+    ?assertEqual(ExpectedNames, ForwardNames),
+    lists:foreach(
+      fun({Route, View}) ->
+          DefinitionIds = lists:sort(lists:append(
+            [html_section_ids(Bytes) || {Name, Bytes} <- ForwardTree,
+                has_binary_prefix(Name, <<Route/binary, "/m-">>),
+                filename:extension(Name) =:= <<".html">>])),
+          ?assertEqual(14, length(DefinitionIds)),
+          ?assertEqual(lists:sort(html_expected_definition_ids(View)),
+                       DefinitionIds)
+      end, [{Route1, View1}, {Route2, View2}]),
+    Catalogue = proplists:get_value(<<"index.html">>, ForwardTree),
+    ?assert(binary:match(Catalogue, <<"<h1>Release catalogue</h1>">>) =/= nomatch),
+    ?assert(binary:match(Catalogue,
+                         <<"<main id=\"main\" class=\"content\" tabindex=\"-1\">">>) =/= nomatch),
+    ?assert(binary:match(Catalogue,
+                         <<Route1/binary, "/index.html\">1.0</a>">>) =/= nomatch),
+    ?assert(binary:match(Catalogue,
+                         <<Route2/binary, "/index.html\">v1.0</a>">>) =/= nomatch),
+    {Position1, _} = binary:match(Catalogue, <<Route1/binary, "/index.html\">1.0</a>">>),
+    {Position2, _} = binary:match(Catalogue, <<Route2/binary, "/index.html\">v1.0</a>">>),
+    ?assert(Position1 < Position2),
+    lists:foreach(
+      fun({Route, Version}) ->
+          HtmlNames = [Name || Name <- ForwardNames,
+                               has_binary_prefix(Name, <<Route/binary, "/">>),
+                               filename:extension(Name) =:= <<".html">>],
+          ?assertEqual(5, length(HtmlNames)),
+          lists:foreach(
+            fun(Name) ->
+                Html = proplists:get_value(Name, ForwardTree),
+                VersionLink = <<"<a class=\"version\" href=\"../index.html\" aria-label=\"Choose exact release ",
+                                Version/binary, "\">", Version/binary, "</a>">>,
+                ?assert(binary:match(Html, VersionLink) =/= nomatch)
+            end, HtmlNames)
+      end, [{Route1, maps:get(version, Release1)},
+            {Route2, maps:get(version, Release2)}]),
+    Modern = proplists:get_value(
+               <<Route1/binary, "/", (module_html_name(<<"erlang">>,
+                                                          <<"ldoc_modern">>))/binary>>,
+               ForwardTree),
+    ?assert(binary:match(Modern,
+                         <<"https://example.test/source/ldoc_modern.erl#L1">>) =/= nomatch),
+    ?assert(binary:match(Modern,
+                         <<"https://example.test/source/ldoc_modern.erl#L14">>) =/= nomatch),
+    OtherModern = proplists:get_value(
+                    <<Route2/binary, "/", (module_html_name(<<"erlang">>,
+                                                               <<"ldoc_modern">>))/binary>>,
+                    ForwardTree),
+    ?assertEqual(nomatch, binary:match(OtherModern, <<"class=\"source\"">>)),
+    DefaultTarget = filename:join(Temp, "site-default-options"),
+    {ok, _} = 'ldoc-site':build(
+                StoreRoot,
+                [#{release => Release1}, #{release => Release2}],
+                DefaultTarget),
+    DefaultTree = site_tree_snapshot(DefaultTarget),
+    ?assertEqual(16, length(DefaultTree)),
+    LocaleTarget = filename:join(Temp, "site-locale-option"),
+    {ok, _} = 'ldoc-site':build(
+                StoreRoot, [#{release => Release1}], LocaleTarget,
+                #{locale => <<"en">>}),
+    ?assertEqual(9, length(site_tree_snapshot(LocaleTarget))),
+    {ok, DefaultView1} = 'ldoc-analysis':view(Retrieved1),
+    {ok, DefaultRender1} = 'ldoc-html':render(DefaultView1),
+    {ok, DefaultAgain1} = 'ldoc-html':render(DefaultView1, #{version_index => false}),
+    ?assertEqual(DefaultRender1, DefaultAgain1),
+    {ok, LinkedRender1} = 'ldoc-html':render(DefaultView1, #{version_index => true}),
+    DefaultPage = proplists:get_value(<<"index.html">>, DefaultRender1),
+    LinkedPage = proplists:get_value(<<"index.html">>, LinkedRender1),
+    ?assert(binary:match(DefaultPage, <<"<span class=\"version\">1.0</span>">>) =/= nomatch),
+    ?assert(binary:match(LinkedPage,
+                         <<"<a class=\"version\" href=\"../index.html\" aria-label=\"Choose exact release 1.0\">1.0</a>">>) =/= nomatch),
+    ?assert('ldoc-html':'valid-options?'(#{})),
+    ?assert('ldoc-html':'valid-options?'(#{version_index => true})),
+    ?assertNot('ldoc-html':'valid-options?'(#{version_index => invalid})),
+    ?assert('ldoc-analysis':'valid-options?'(#{})),
+    ?assertNot('ldoc-analysis':'valid-options?'(#{source_root => "relative"})),
+    site_invalid_inputs(StoreRoot, Temp, Release1),
+    site_existing_targets(StoreRoot, Temp, [Spec1, Spec2]),
+    site_concurrent_build(StoreRoot, Temp, [Spec1, Spec2]),
+    WeirdRelease = #{namespace => <<"local & </h2>">>,
+                     package => <<"pkg/../?">>,
+                     version => unicode:characters_to_binary("é&v")},
+    WeirdDocset = Retrieved1#{release := WeirdRelease},
+    ok = 'ldoc-store':put(StoreRoot, WeirdDocset),
+    BeforeWeirdBytes = file:read_file(store_path(StoreRoot, WeirdRelease)),
+    WeirdTarget = filename:join(Temp, "site-hostile-labels"),
+    {ok, _} = 'ldoc-site':build(
+                StoreRoot,
+                [#{release => WeirdRelease}, #{release => Release1}],
+                WeirdTarget),
+    WeirdTree = site_tree_snapshot(WeirdTarget),
+    WeirdCatalogue = proplists:get_value(<<"index.html">>, WeirdTree),
+    ?assert(binary:match(WeirdCatalogue,
+                         <<"local &amp; &lt;/h2&gt;/pkg/../?">>) =/= nomatch),
+    ?assertNot(binary:match(WeirdCatalogue, <<"<h2>local & </h2>">>) =/= nomatch),
+    ?assertEqual(16, length(WeirdTree)),
+    {ok, _} = 'ldoc-html':render(View2),
+    {ok, After1} = 'ldoc-store':get(StoreRoot, Release1),
+    {ok, After2} = 'ldoc-store':get(StoreRoot, Release2),
+    {ok, AfterWeird} = 'ldoc-store':get(StoreRoot, WeirdRelease),
+    ?assertEqual(element(2, Before1), After1),
+    ?assertEqual(element(2, Before2), After2),
+    ?assertEqual(WeirdDocset, AfterWeird),
+    ?assertEqual(BeforeBytes1, file:read_file(store_path(StoreRoot, Release1))),
+    ?assertEqual(BeforeBytes2, file:read_file(store_path(StoreRoot, Release2))),
+    ?assertEqual(BeforeWeirdBytes,
+                 file:read_file(store_path(StoreRoot, WeirdRelease))),
+    Index1 = consumer_index(View1),
+    Index2 = consumer_index(View2),
+    ?assertEqual(2, maps:get(language_count, Index1)),
+    ?assertEqual(2, maps:get(language_count, Index2)),
+    ?assertEqual(4, maps:get(module_count, Index1)),
+    ?assertEqual(4, maps:get(module_count, Index2)),
+    ?assertEqual(14, maps:size(maps:get(definitions, Index1))),
+    ?assertEqual(14, maps:size(maps:get(definitions, Index2))),
+    ok.
+
+site_invalid_inputs(StoreRoot, Temp, Release) ->
+    Target = filename:join(Temp, "site-invalid-target"),
+    ?assertEqual({error, invalid_options},
+                 'ldoc-site':build(<<>>, [], "relative", #{unknown => true})),
+    ?assertEqual({error, invalid_store_root},
+                 'ldoc-site':build(<<>>, [], "relative")),
+    ?assertEqual({error, invalid_target},
+                 'ldoc-site':build(StoreRoot, [], "relative")),
+    ?assertEqual({error, invalid_target},
+                 'ldoc-site':build(StoreRoot, [], filename:absname("/"))),
+    ?assertEqual({error, invalid_releases},
+                 'ldoc-site':build(StoreRoot, [], Target)),
+    Good = #{release => Release},
+    BadRelease = #{namespace => <<255>>, package => <<"p">>, version => <<"1">>},
+    ?assertEqual({error, invalid_releases},
+                 'ldoc-site':build(StoreRoot,
+                                   [Good, Good, #{release => BadRelease}], Target)),
+    ?assertEqual({error, {duplicate_release, Release}},
+                 'ldoc-site':build(StoreRoot, [Good, Good], Target)),
+    ?assertEqual({error, invalid_releases},
+                 'ldoc-site':build(StoreRoot,
+                                   [#{release => Release, source_root => "relative"}],
+                                   Target)),
+    ?assertEqual({error, invalid_releases},
+                 'ldoc-site':build(StoreRoot,
+                                   [#{release => Release,
+                                      source_base => <<"https:opaque/">>}],
+                                   Target)),
+    ?assertEqual({error, invalid_releases},
+                 'ldoc-site':build(StoreRoot,
+                                   [#{release => Release, overview => <<255>>}],
+                                   Target)),
+    ?assertEqual({error, {release, Release, store, not_found}},
+                 'ldoc-site':build(filename:join(Temp, "missing-store"),
+                                   [Good], Target)),
+    MissingParent = unicode:characters_to_binary(
+                      filename:join(Temp, "missing-parent")),
+    ?assertEqual({error, {output, parent, MissingParent, enoent}},
+                 'ldoc-site':build(StoreRoot, [Good],
+                                   filename:join([Temp, "missing-parent", "site"]))),
+    ?assertEqual({error, enoent}, file:read_link_info(Target)),
+    ok.
+
+site_existing_targets(StoreRoot, Temp, Specs) ->
+    FileTarget = filename:join(Temp, "site-existing-file"),
+    FileBytes = <<"existing file stays byte-for-byte">>,
+    ok = file:write_file(FileTarget, FileBytes),
+    ?assertEqual({error, output_exists},
+                 'ldoc-site':build(StoreRoot, Specs, FileTarget)),
+    ?assertEqual({ok, FileBytes}, file:read_file(FileTarget)),
+    DirTarget = filename:join(Temp, "site-existing-directory"),
+    ok = file:make_dir(DirTarget),
+    ok = file:make_dir(filename:join(DirTarget, "keep")),
+    ok = file:write_file(filename:join([DirTarget, "keep", "sentinel"]),
+                         <<"directory sentinel">>),
+    DirBefore = site_tree_snapshot(DirTarget),
+    ?assertEqual({error, output_exists},
+                 'ldoc-site':build(StoreRoot, Specs, DirTarget)),
+    ?assertEqual(DirBefore, site_tree_snapshot(DirTarget)),
+    Sentinel = filename:join(Temp, "site-link-sentinel"),
+    ok = file:write_file(Sentinel, <<"symlink target bytes">>),
+    LiveLink = filename:join(Temp, "site-live-symlink"),
+    ok = file:make_symlink(Sentinel, LiveLink),
+    {ok, LiveTarget} = file:read_link(LiveLink),
+    ?assertEqual({error, output_exists},
+                 'ldoc-site':build(StoreRoot, Specs, LiveLink)),
+    ?assertEqual({ok, LiveTarget}, file:read_link(LiveLink)),
+    ?assertEqual({ok, <<"symlink target bytes">>}, file:read_file(Sentinel)),
+    Dangling = filename:join(Temp, "site-dangling-symlink"),
+    ok = file:make_symlink("site-never-created", Dangling),
+    {ok, DanglingTarget} = file:read_link(Dangling),
+    ?assertEqual({error, output_exists},
+                 'ldoc-site':build(StoreRoot, Specs, Dangling)),
+    ?assertEqual({ok, DanglingTarget}, file:read_link(Dangling)),
+    ok.
+
+site_concurrent_build(StoreRoot, Temp, Specs) ->
+    Target = filename:join(Temp, "site-concurrent-winner"),
+    Parent = self(),
+    Workers = [spawn_monitor(
+                 fun() ->
+                     receive
+                         start ->
+                             Parent ! {site_build_result, self(),
+                                      'ldoc-site':build(StoreRoot, Specs, Target)}
+                     end
+                 end) || _ <- [1, 2]],
+    [Pid ! start || {Pid, _Ref} <- Workers],
+    Results = site_collect_build_results(2, []),
+    lists:foreach(
+      fun({_Pid, Ref}) ->
+          receive {'DOWN', Ref, process, _Worker, normal} -> ok end
+      end, Workers),
+    Successes = [Index || {_Pid, {ok, Index}} <- Results],
+    Losers = [Reason || {_Pid, {error, Reason}} <- Results],
+    ?assertEqual(1, length(Successes)),
+    ?assertEqual([output_exists], Losers),
+    ?assertEqual(unicode:characters_to_binary(
+                   filename:join(Target, "index.html")), hd(Successes)),
+    ?assertEqual(16, length(site_tree_snapshot(Target))),
+    ok.
+
+site_collect_build_results(0, Results) -> Results;
+site_collect_build_results(Remaining, Results) ->
+    receive
+        {site_build_result, Pid, Result} ->
+            site_collect_build_results(Remaining - 1, [{Pid, Result} | Results])
+    end.
+
+site_release_route(Release) ->
+    Namespace = maps:get(namespace, Release),
+    Package = maps:get(package, Release),
+    Version = maps:get(version, Release),
+    Preimage = <<(byte_size(Namespace)):32/unsigned-big, Namespace/binary,
+                 (byte_size(Package)):32/unsigned-big, Package/binary,
+                 (byte_size(Version)):32/unsigned-big, Version/binary>>,
+    Hex = binary:encode_hex(crypto:hash(sha256, Preimage), uppercase),
+    <<"r-", Hex/binary>>.
+
+has_binary_prefix(Binary, Prefix) ->
+    byte_size(Binary) >= byte_size(Prefix) andalso
+    binary:part(Binary, 0, byte_size(Prefix)) =:= Prefix.
+
+site_tree_snapshot(Root) ->
+    lists:sort(site_tree_entries(Root, "", [])).
+
+site_tree_entries(Root, Relative, Acc) ->
+    Current = case Relative of
+                  "" -> Root;
+                  _ -> filename:join(Root, Relative)
+              end,
+    {ok, Names} = file:list_dir(Current),
+    lists:foldl(
+      fun(Name, Items) ->
+          Rel = case Relative of
+                    "" -> Name;
+                    _ -> filename:join(Relative, Name)
+                end,
+          Path = filename:join(Root, Rel),
+          case filelib:is_dir(Path) of
+              true -> site_tree_entries(Root, Rel, Items);
+              false ->
+                  {ok, Bytes} = file:read_file(Path),
+                  [{unicode:characters_to_binary(Rel), Bytes} | Items]
+          end
+      end, Acc, Names).
 
 consumer_indexes(Views) ->
     maps:from_list([{maps:get(release, View), consumer_index(View)} ||

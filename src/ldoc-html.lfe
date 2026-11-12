@@ -3,7 +3,8 @@
 (defmodule ldoc-html
   (export
    (render 1)
-   (render 2)))
+   (render 2)
+   (valid-options? 1)))
 
 (defspec (render 1)
   ([(term)] (UNION (tuple 'ok (list (tuple (binary) (binary))))
@@ -11,6 +12,15 @@
 (defspec (render 2)
   ([(term) (term)] (UNION (tuple 'ok (list (tuple (binary) (binary))))
                           (tuple 'error (UNION 'invalid_options 'invalid_view)))))
+
+(defspec (valid-options? 1)
+  ([(term)] 'boolean))
+
+(defun valid-options? (options)
+  "Return whether OPTIONS would be accepted by render/2."
+  (case (validate-options options)
+    (`#(ok ,_) 'true)
+    (_ 'false)))
 
 (defun render (view)
   "Render VIEW with default options into sorted relative filename/byte pairs."
@@ -28,9 +38,11 @@
 
 (defun validate-options (options)
   (if (andalso (is_map options)
-               (all-keys? (maps:keys options) '(locale overview source_base))
+               (all-keys? (maps:keys options)
+                          '(locale overview source_base version_index))
                (valid-locale? (maps:get 'locale options #b("en")))
-               (valid-overview? (maps:get 'overview options #b())))
+               (andalso (valid-overview? (maps:get 'overview options #b()))
+                        (is_boolean (maps:get 'version_index options 'false))))
       (case (maps:find 'source_base options)
         ('error `#(ok ,(canonical-options options)))
         (`#(ok ,base) (if (valid-source-base? base)
@@ -40,7 +52,8 @@
 (defun canonical-options (options)
   `#m(locale ,(maps:get 'locale options #b("en"))
       overview ,(maps:get 'overview options #b())
-      source_base ,(maps:get 'source_base options 'none)))
+      source_base ,(maps:get 'source_base options 'none)
+      version_index ,(maps:get 'version_index options 'false)))
 (defun all-keys? (keys allowed)
   (case keys
     (() 'true)
@@ -354,7 +367,7 @@
   (lists:map (lambda (module) `#(,(maps:get 'name language) ,module)) (maps:get 'modules language)))
 (defun render-index (view options modules)
   (html-binary
-    (list (page-start (maps:get 'release view))
+    (list (page-start (maps:get 'release view) options)
           (mobile-toolbar)
           #b("<div class=\"page-layout overview-layout\">")
           (navigation-panel (maps:get 'languages view) 'none)
@@ -399,7 +412,7 @@
          (filename (module-filename language (maps:get 'name module))))
     (tuple filename
       (html-binary
-        (list (page-start (maps:get 'release view))
+        (list (page-start (maps:get 'release view) options)
               (mobile-toolbar)
               #b("<div class=\"page-layout\">")
               (navigation-panel languages item)
@@ -413,14 +426,25 @@
               #b("</article></main></div>")
               (page-end))))))
 (defun html-binary (parts) (iolist_to_binary parts))
-(defun page-start (release)
+(defun page-start (release options)
   (list #b("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>")
         (ldoc-markup:escape (release-title release))
         #b(" · LDOC</title><link rel=\"stylesheet\" href=\"ldoc.css\"><script defer src=\"ldoc.js\"></script></head><body><a class=\"skip\" href=\"#main\">Skip to content</a><header class=\"top\"><span class=\"library\">")
         (ldoc-markup:escape (library-coordinate release))
-        #b("</span><span class=\"version\">")
-        (ldoc-markup:escape (maps:get 'version release))
-        #b("</span><span class=\"brand-mark\">LDOC</span></header>")))
+        #b("</span>")
+        (version-label release options)
+        #b("<span class=\"brand-mark\">LDOC</span></header>")))
+(defun version-label (release options)
+  (let ((version (maps:get 'version release)))
+    (if (=:= (maps:get 'version_index options) 'true)
+        (list #b("<a class=\"version\" href=\"../index.html\" aria-label=\"Choose exact release ")
+              (ldoc-markup:escape version)
+              #b("\">")
+              (ldoc-markup:escape version)
+              #b("</a>"))
+        (list #b("<span class=\"version\">")
+              (ldoc-markup:escape version)
+              #b("</span>")))))
 (defun mobile-toolbar ()
   #b("<div class=\"mobile-toolbar\"><button class=\"menu-button\" data-menu-button hidden aria-expanded=\"false\" aria-controls=\"api-navigation\">☰ Open navigation</button><div class=\"mobile-strip\"></div></div>"))
 (defun page-end () #b("</body></html>"))
