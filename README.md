@@ -115,6 +115,11 @@ Options are a map containing only:
 - `source_base`: optional absolute HTTP or HTTPS URI ending in `/`, with a
   nonempty host and no userinfo, query, or fragment. An explicit port must be
   0 through 65535. Percent escapes must be complete hexadecimal triplets.
+- `version_index`: a boolean, default `false`. When `true`, the exact visible
+  version in a release page header links to `../index.html`, the local
+  catalogue. This fixed parent link is intended for a release page inside a
+  versioned site directory; ordinary single-release exports keep the original
+  header by default.
 
 The requested locale still selects documentation by exact key, then `und`,
 then the first key in lexical order. A selected body receives an HTML `lang`
@@ -184,31 +189,50 @@ coordinates and lists their exact versions bytewise. The optional fourth
 argument accepts only `locale`. Every release is prepared before the builder
 claims or changes the output directory.
 
+From the LDOC checkout, start an Erlang shell with `rebar3 shell`; the
+compiled application is then available on the code path. Paste the following
+block into that shell:
+
 ```erlang
-Release1 = #{namespace => <<"local">>, package => <<"my_app">>,
-             version => <<"1.2.0">>},
-Release2 = Release1#{version := <<"1.3.0">>},
-StoreRoot = "/var/tmp/ldoc-snapshots",
-Target = "/var/tmp/my_app-reference",
+{ok, _Started} = application:ensure_all_started(ldoc),
+Release1 = #{namespace => <<"local">>, package => <<"site-demo">>,
+             version => <<"1.0">>},
+Release2 = Release1#{version := <<"2.0">>},
+%% This runnable demonstration uses one installed LDOC BEAM for both keys.
+%% Real releases should each be assembled from their matching compiled inputs.
+Inputs = [code:which('ldoc-docset')],
+{ok, Docset1} = 'ldoc-docset':assemble(Release1, Inputs),
+{ok, Docset2} = 'ldoc-docset':assemble(Release2, Inputs),
+Work = filename:join("/tmp", "ldoc-site-demo-" ++
+                     integer_to_list(erlang:system_time(microsecond)) ++ "-" ++
+                     integer_to_list(erlang:unique_integer([positive]))),
+ok = file:make_dir(Work),
+StoreRoot = filename:join(Work, "snapshots"),
+ok = file:make_dir(StoreRoot),
+ok = 'ldoc-store':put(StoreRoot, Docset1),
+ok = 'ldoc-store':put(StoreRoot, Docset2),
+Target = filename:join(Work, "site"),
 Specs = [#{release => Release1,
-           overview => <<"# My application\n\nBrowse the exact API release.">>,
-           source_root => "/work/my_app",
-           source_base => <<"https://example.test/my_app/">>},
+           overview => <<"# My application\n\nBrowse the exact API release.">>},
          #{release => Release2}],
 {ok, IndexPath} = 'ldoc-site':build(StoreRoot, Specs, Target),
-%% Or select a locale for every release:
-{ok, OtherIndexPath} = 'ldoc-site':build(StoreRoot, Specs,
-                                          "/var/tmp/my_app-reference-fr",
-                                          #{locale => <<"fr">>}).
+io:format("Open this local index in a browser: ~ts~n", [IndexPath]).
 ```
 
-Open the returned `IndexPath` in a browser, or serve its containing directory
-with an ordinary local static server. The catalogue has direct keyboard- and
-no-script-friendly links to each exact release. Within a release, each page's
-visible version link returns to the catalogue. `source_root` and
-`source_base` remain caller declarations; a source link appears only for a
-relative reference selected by the public analysis view beneath that root.
-The builder does not infer a host, revision, or source target.
+The block creates a fresh work directory and snapshots child under `/tmp`,
+stores both exact demo releases, and leaves the new `site` target for the
+builder to claim. Open the printed absolute `IndexPath` in a browser as a
+local file. For HTTP, use the printed index's containing directory in another
+terminal, for example `python3 -m http.server 8000 --directory /tmp/ldoc-site-demo-<id>/site`,
+then visit `http://localhost:8000/`. The two
+demo keys intentionally share the same installed BEAM; for real releases,
+pass each release's own matching compiled inputs to `ldoc-docset:assemble/2`.
+The catalogue has direct keyboard- and no-script-friendly links to each exact
+release. Within a release, each page's visible version link returns to the
+catalogue. `source_root` and `source_base` remain caller declarations; a
+source link appears only for a relative reference selected by the public
+analysis view beneath that root. The builder does not infer a host, revision,
+or source target.
 
 The target must not already exist, and its parent must already be a directory.
 The caller provides a stable trusted parent; the builder does not resolve

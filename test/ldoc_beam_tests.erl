@@ -2215,34 +2215,173 @@ site_existing_targets(StoreRoot, Temp, Specs) ->
 site_concurrent_build(StoreRoot, Temp, Specs) ->
     Target = filename:join(Temp, "site-concurrent-winner"),
     Parent = self(),
+    Ref = make_ref(),
+    Deadline = site_build_deadline(),
     Workers = [spawn_monitor(
-                 fun() ->
-                     receive
-                         start ->
-                             Parent ! {site_build_result, self(),
-                                      'ldoc-site':build(StoreRoot, Specs, Target)}
-                     end
+                 fun() -> site_build_worker(Parent, Ref, StoreRoot, Specs,
+                                            Target, Deadline)
                  end) || _ <- [1, 2]],
-    [Pid ! start || {Pid, _Ref} <- Workers],
-    Results = site_collect_build_results(2, []),
-    lists:foreach(
-      fun({_Pid, Ref}) ->
-          receive {'DOWN', Ref, process, _Worker, normal} -> ok end
-      end, Workers),
-    Successes = [Index || {_Pid, {ok, Index}} <- Results],
-    Losers = [Reason || {_Pid, {error, Reason}} <- Results],
-    ?assertEqual(1, length(Successes)),
-    ?assertEqual([output_exists], Losers),
-    ?assertEqual(unicode:characters_to_binary(
-                   filename:join(Target, "index.html")), hd(Successes)),
-    ?assertEqual(16, length(site_tree_snapshot(Target))),
+    try
+        site_wait_build_ready(Workers, Ref, Deadline, #{}),
+        [Pid ! {site_build_go, Ref} || {Pid, _Monitor} <- Workers],
+        Results = site_wait_build_completion(Workers, Ref, Deadline, #{}, #{}),
+        Successes = [Index || {_Pid, {ok, Index}} <- Results],
+        Losers = [Reason || {_Pid, {error, Reason}} <- Results],
+        ?assertEqual(1, length(Successes)),
+        ?assertEqual([output_exists], Losers),
+        ?assertEqual(unicode:characters_to_binary(
+                       filename:join(Target, "index.html")), hd(Successes)),
+        ?assertEqual(16, length(site_tree_snapshot(Target)))
+    after
+        cancel_monitored(Workers)
+    end,
+    site_worker_failure_cleanup_probe(),
     ok.
 
-site_collect_build_results(0, Results) -> Results;
-site_collect_build_results(Remaining, Results) ->
+site_build_deadline() ->
+    erlang:monotonic_time(millisecond) + 30000.
+
+site_build_remaining(Deadline) ->
+    case Deadline - erlang:monotonic_time(millisecond) of
+        Remaining when Remaining > 0 -> Remaining;
+        _ -> erlang:error(site_build_deadline_exceeded)
+    end.
+
+site_build_worker(Parent, Ref, StoreRoot, Specs, Target, Deadline) ->
+    Parent ! {site_build_ready, Ref, self()},
     receive
-        {site_build_result, Pid, Result} ->
-            site_collect_build_results(Remaining - 1, [{Pid, Result} | Results])
+        {site_build_go, Ref} ->
+            Result = 'ldoc-site':build(StoreRoot, Specs, Target),
+            Parent ! {site_build_result, Ref, self(), Result}
+    after site_build_remaining(Deadline) ->
+        erlang:error(site_build_worker_gate_deadline_exceeded)
+    end.
+
+site_wait_build_ready(Workers, Ref, Deadline, Ready) ->
+    case map_size(Ready) =:= length(Workers) of
+        true -> ok;
+        false ->
+            receive
+                {site_build_ready, Ref, Pid} ->
+                    case {site_expected_worker(Pid, Workers),
+                          maps:is_key(Pid, Ready)} of
+                        {true, false} ->
+                            site_wait_build_ready(
+                              Workers, Ref, Deadline,
+                              maps:put(Pid, true, Ready));
+                        _ -> erlang:error(site_build_unexpected_ready)
+                    end;
+                {'DOWN', Monitor, process, Pid, Reason} ->
+                    case site_expected_monitor(Pid, Monitor, Workers) of
+                        true -> erlang:error({site_build_worker_before_ready,
+                                              Pid, Reason});
+                        false -> site_wait_build_ready(
+                                   Workers, Ref, Deadline, Ready)
+                    end
+            after site_build_remaining(Deadline) ->
+                erlang:error(site_build_deadline_exceeded)
+            end
+    end.
+
+site_wait_build_completion(Workers, Ref, Deadline, Results, Downs) ->
+    Count = length(Workers),
+    case map_size(Results) =:= Count andalso map_size(Downs) =:= Count of
+        true -> maps:to_list(Results);
+        false ->
+            receive
+                {site_build_result, Ref, Pid, Result} ->
+                    case {site_expected_worker(Pid, Workers),
+                          maps:is_key(Pid, Results)} of
+                        {true, false} ->
+                            site_wait_build_completion(
+                              Workers, Ref, Deadline,
+                              maps:put(Pid, Result, Results), Downs);
+                        _ -> erlang:error(site_build_unexpected_result)
+                    end;
+                {'DOWN', Monitor, process, Pid, normal} ->
+                    case {site_expected_monitor(Pid, Monitor, Workers),
+                          maps:is_key(Pid, Downs),
+                          maps:is_key(Pid, Results)} of
+                        {true, false, true} ->
+                            site_wait_build_completion(
+                              Workers, Ref, Deadline, Results,
+                              maps:put(Pid, normal, Downs));
+                        {true, false, false} ->
+                            erlang:error({site_build_worker_missing_result,
+                                          Pid});
+                        _ -> site_wait_build_completion(
+                               Workers, Ref, Deadline, Results, Downs)
+                    end;
+                {'DOWN', Monitor, process, Pid, Reason} ->
+                    case site_expected_monitor(Pid, Monitor, Workers) of
+                        true -> erlang:error({site_build_worker_crashed,
+                                              Pid, Reason});
+                        false -> site_wait_build_completion(
+                                   Workers, Ref, Deadline, Results, Downs)
+                    end
+            after site_build_remaining(Deadline) ->
+                erlang:error(site_build_deadline_exceeded)
+            end
+    end.
+
+site_expected_worker(Pid, Workers) ->
+    lists:keymember(Pid, 1, Workers).
+
+site_expected_monitor(Pid, Monitor, Workers) ->
+    lists:keyfind(Pid, 1, Workers) =:= {Pid, Monitor}.
+
+site_worker_failure_cleanup_probe() ->
+    Ref = make_ref(),
+    Deadline = site_build_deadline(),
+    FailureWorker = spawn_monitor(
+                      fun() ->
+                          receive
+                              {site_probe_crash, Ref} ->
+                                  exit(site_probe_expected_crash)
+                          after site_build_remaining(Deadline) ->
+                              erlang:error(site_probe_deadline_exceeded)
+                          end
+                      end),
+    Survivor = spawn_monitor(
+                 fun() ->
+                     receive
+                         {site_probe_release, Ref} -> ok
+                     after site_build_remaining(Deadline) ->
+                         erlang:error(site_probe_deadline_exceeded)
+                     end
+                 end),
+    FailurePid = element(1, FailureWorker),
+    SurvivorPid = element(1, Survivor),
+    Workers = [FailureWorker, Survivor],
+    try
+        FailurePid ! {site_probe_crash, Ref},
+        Observed = try
+                       site_wait_build_completion(
+                         Workers, Ref, Deadline, #{}, #{})
+                   of
+                       Result -> {unexpected_completion, Result}
+                   catch
+                       error:Reason -> {error, Reason}
+                   after
+                       cancel_monitored(Workers)
+                   end,
+        ?assertEqual({error, {site_build_worker_crashed,
+                              FailurePid, site_probe_expected_crash}},
+                     Observed),
+        site_assert_worker_stopped(SurvivorPid, Deadline),
+        ?assertNot(is_process_alive(FailurePid)),
+        ok
+    after
+        cancel_monitored(Workers)
+    end.
+
+site_assert_worker_stopped(Pid, Deadline) ->
+    Monitor = erlang:monitor(process, Pid),
+    receive
+        {'DOWN', Monitor, process, Pid, _Reason} -> ok
+    after site_build_remaining(Deadline) ->
+        _ = erlang:demonitor(Monitor, [flush]),
+        erlang:error(site_build_worker_cleanup_deadline_exceeded)
     end.
 
 site_release_route(Release) ->
