@@ -633,9 +633,12 @@ store_producer_oracles(Root, Release, Docset, ErlPath) ->
     ?assertEqual([], maps:get(signatures, LegacyMacro)),
     Modern = module_named(Modules, <<"ldoc_modern">>),
     ModernEntries = maps:get(entries, Modern),
-    ModernShow = entry(ModernEntries, <<"function">>, <<"show">>, 1),
     {ok, ErlBeam} = file:read_file(ErlPath),
-    RawShow = [Raw || Raw <- element(7, docs_term(ErlBeam)),
+    ProducerDocs = docs_term(ErlBeam),
+    ?assertEqual(element(2, ProducerDocs), maps:get(annotation, Modern)),
+    ?assertEqual(element(6, ProducerDocs), maps:get(metadata, Modern)),
+    ModernShow = entry(ModernEntries, <<"function">>, <<"show">>, 1),
+    RawShow = [Raw || Raw <- element(7, ProducerDocs),
                       element(1, Raw) =:= {function, show, 1}],
     [ProducerShow] = RawShow,
     ?assertEqual(element(2, ProducerShow),
@@ -902,7 +905,9 @@ store_invalid_inputs(Temp, Root, Release, Docset) ->
         ?assertEqual({error, invalid_release_key},
                      'ldoc-store':get(Absent, Release#{version := <<>>}))
     after
-        _ = port_close(Port)
+        try port_close(Port)
+        catch error:badarg -> ok
+        end
     end,
     ?assertEqual(ExistingBytes,
                  element(2, file:read_file(store_path(Root, Release)))).
@@ -2571,13 +2576,37 @@ analysis_sources(Temp, Docset, DefaultView) ->
     ?assert(is_binary(maps:get(path, maps:get(source,
                      view_module(Sourced, <<"erlang">>,
                                  <<"ldoc_classic">>))))),
+    ExpectedModernPath = filename:join(Root, "ldoc_modern.erl"),
+    NativeModern = module_named(maps:get(modules, Docset),
+                                <<"ldoc_modern">>),
+    NativeModernMetadata = maps:get(metadata, NativeModern),
+    NativeModernShow = entry(maps:get(entries, NativeModern),
+                             <<"function">>, <<"show">>, 1),
+    NativeModernShowMetadata = maps:get(metadata, NativeModernShow),
     Modern = view_module(Sourced, <<"erlang">>, <<"ldoc_modern">>),
-    ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 1},
-                 maps:get(source, Modern)),
     ModernShow = view_definition(Sourced, <<"erlang">>, <<"ldoc_modern">>,
                                  <<"function">>, <<"show">>, 1),
-    ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 14},
-                 maps:get(source, ModernShow)),
+    case {NativeModernMetadata, NativeModernShowMetadata} of
+        {ModuleMetadata, ShowMetadata}
+          when ModuleMetadata =:= #{otp_doc_vsn => {1, 0, 0}},
+               ShowMetadata =:= #{} ->
+            ?assertNot(maps:is_key(source, Modern)),
+            ?assertNot(maps:is_key(source, ModernShow));
+        {ModuleMetadata, ShowMetadata}
+          when ModuleMetadata =:=
+                   #{otp_doc_vsn => {1, 0, 0}, behaviours => [],
+                     source_anno => {1, 2},
+                     source_path => ExpectedModernPath},
+               ShowMetadata =:= #{source_anno => {14, 1}} ->
+            ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 1},
+                         maps:get(source, Modern)),
+            ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 14},
+                         maps:get(source, ModernShow));
+        OtherNativeSourceMetadata ->
+            erlang:error({unexpected_modern_source_metadata,
+                          OtherNativeSourceMetadata})
+    end,
+    analysis_authored_source_fixture(Root, Docset),
     Classic = view_module(Sourced, <<"erlang">>, <<"ldoc_classic">>),
     ?assertEqual(#{path => <<"ldoc_classic.erl">>, line => 2},
                  maps:get(source, Classic)),
@@ -2776,6 +2805,36 @@ analysis_sources(Temp, Docset, DefaultView) ->
                                      <<"ldoc-fixture">>, <<"function">>,
                                      <<"sample">>, 1)))),
     ok.
+
+analysis_authored_source_fixture(Root, Docset) ->
+    ModulePath = filename:join([Root, "src", "ldoc_modern.erl"]),
+    ModuleSourceAnno = erl_anno:set_file(ModulePath, erl_anno:new(1)),
+    ShowSourceAnno = erl_anno:set_file(ModulePath, erl_anno:new(14)),
+    ModuleDocset = update_module(
+                     fun(Module) ->
+                         Module#{metadata := #{source_path => ModulePath,
+                                               source_anno =>
+                                                   ModuleSourceAnno}}
+                     end, Docset, <<"ldoc_modern">>),
+    AuthoredSourceDocset = map_entry(
+                             fun(Entry) ->
+                                 Entry#{metadata :=
+                                            #{source_anno => ShowSourceAnno}}
+                             end, ModuleDocset, <<"ldoc_modern">>,
+                             <<"function">>, <<"show">>, 1),
+    ?assertNotEqual(Docset, AuthoredSourceDocset),
+    {ok, AuthoredView} = 'ldoc-analysis':view(
+                           AuthoredSourceDocset,
+                           #{source_root => Root}),
+    AuthoredModule = view_module(AuthoredView, <<"erlang">>,
+                                 <<"ldoc_modern">>),
+    ?assertEqual(#{path => <<"src/ldoc_modern.erl">>, line => 1},
+                 maps:get(source, AuthoredModule)),
+    AuthoredShow = view_definition(AuthoredView, <<"erlang">>,
+                                  <<"ldoc_modern">>, <<"function">>,
+                                  <<"show">>, 1),
+    ?assertEqual(#{path => <<"src/ldoc_modern.erl">>, line => 14},
+                 maps:get(source, AuthoredShow)).
 
 analysis_invalid_inputs(Docset) ->
     ?assertEqual({error, invalid_options},
