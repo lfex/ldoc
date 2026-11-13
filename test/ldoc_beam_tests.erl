@@ -1627,10 +1627,9 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
     GenuineModernHtml = proplists:get_value(
                           module_html_name(<<"erlang">>, <<"ldoc_modern">>),
                           GenuineSourceBundle),
-    ?assert(binary:match(GenuineModernHtml,
-                         <<"https://example.test/tree/ldoc_modern.erl#L1">>) =/= nomatch),
-    ?assert(binary:match(GenuineModernHtml,
-                         <<"https://example.test/tree/ldoc_modern.erl#L14">>) =/= nomatch),
+    assert_native_modern_source_html(
+      GenuineModernHtml, Docset1, filename:absname(Temp),
+      <<"https://example.test/tree/">>),
     GenuineClassicHtml = proplists:get_value(
                            module_html_name(<<"erlang">>, <<"ldoc_classic">>),
                            GenuineSourceBundle),
@@ -2067,10 +2066,17 @@ site_s01_s06(Temp, StoreRoot, Retrieved1, Retrieved2, View1, View2) ->
                <<Route1/binary, "/", (module_html_name(<<"erlang">>,
                                                           <<"ldoc_modern">>))/binary>>,
                ForwardTree),
-    ?assert(binary:match(Modern,
-                         <<"https://example.test/source/ldoc_modern.erl#L1">>) =/= nomatch),
-    ?assert(binary:match(Modern,
-                         <<"https://example.test/source/ldoc_modern.erl#L14">>) =/= nomatch),
+    assert_native_modern_source_html(
+      Modern, Retrieved1, filename:absname(Temp),
+      <<"https://example.test/source/">>),
+    Classic = proplists:get_value(
+                <<Route1/binary, "/", (module_html_name(<<"erlang">>,
+                                                           <<"ldoc_classic">>))/binary>>,
+                ForwardTree),
+    ?assert(binary:match(Classic,
+                         <<"https://example.test/source/ldoc_classic.erl#L2">>) =/= nomatch),
+    ?assert(binary:match(Classic,
+                         <<"https://example.test/source/ldoc_classic.erl#L7">>) =/= nomatch),
     OtherModern = proplists:get_value(
                     <<Route2/binary, "/", (module_html_name(<<"erlang">>,
                                                                <<"ldoc_modern">>))/binary>>,
@@ -2576,35 +2582,18 @@ analysis_sources(Temp, Docset, DefaultView) ->
     ?assert(is_binary(maps:get(path, maps:get(source,
                      view_module(Sourced, <<"erlang">>,
                                  <<"ldoc_classic">>))))),
-    ExpectedModernPath = filename:join(Root, "ldoc_modern.erl"),
-    NativeModern = module_named(maps:get(modules, Docset),
-                                <<"ldoc_modern">>),
-    NativeModernMetadata = maps:get(metadata, NativeModern),
-    NativeModernShow = entry(maps:get(entries, NativeModern),
-                             <<"function">>, <<"show">>, 1),
-    NativeModernShowMetadata = maps:get(metadata, NativeModernShow),
     Modern = view_module(Sourced, <<"erlang">>, <<"ldoc_modern">>),
     ModernShow = view_definition(Sourced, <<"erlang">>, <<"ldoc_modern">>,
                                  <<"function">>, <<"show">>, 1),
-    case {NativeModernMetadata, NativeModernShowMetadata} of
-        {ModuleMetadata, ShowMetadata}
-          when ModuleMetadata =:= #{otp_doc_vsn => {1, 0, 0}},
-               ShowMetadata =:= #{} ->
+    case native_modern_source_state(Docset, Root) of
+        absent ->
             ?assertNot(maps:is_key(source, Modern)),
             ?assertNot(maps:is_key(source, ModernShow));
-        {ModuleMetadata, ShowMetadata}
-          when ModuleMetadata =:=
-                   #{otp_doc_vsn => {1, 0, 0}, behaviours => [],
-                     source_anno => {1, 2},
-                     source_path => ExpectedModernPath},
-               ShowMetadata =:= #{source_anno => {14, 1}} ->
+        present ->
             ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 1},
                          maps:get(source, Modern)),
             ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 14},
-                         maps:get(source, ModernShow));
-        OtherNativeSourceMetadata ->
-            erlang:error({unexpected_modern_source_metadata,
-                          OtherNativeSourceMetadata})
+                         maps:get(source, ModernShow))
     end,
     analysis_authored_source_fixture(Root, Docset),
     Classic = view_module(Sourced, <<"erlang">>, <<"ldoc_classic">>),
@@ -2805,6 +2794,45 @@ analysis_sources(Temp, Docset, DefaultView) ->
                                      <<"ldoc-fixture">>, <<"function">>,
                                      <<"sample">>, 1)))),
     ok.
+
+native_modern_source_state(Docset, Root) ->
+    NativeModern = module_named(maps:get(modules, Docset),
+                                <<"ldoc_modern">>),
+    NativeModernMetadata = maps:get(metadata, NativeModern),
+    NativeModernShow = entry(maps:get(entries, NativeModern),
+                             <<"function">>, <<"show">>, 1),
+    NativeModernShowMetadata = maps:get(metadata, NativeModernShow),
+    ExpectedModernPath = filename:join(Root, "ldoc_modern.erl"),
+    case {NativeModernMetadata, NativeModernShowMetadata} of
+        {#{otp_doc_vsn := {1, 0, 0}}, #{}}
+          when NativeModernMetadata =:= #{otp_doc_vsn => {1, 0, 0}} ->
+            absent;
+        {#{otp_doc_vsn := {1, 0, 0}, behaviours := [],
+           source_anno := {1, 2}, source_path := ExpectedModernPath},
+         #{source_anno := {14, 1}}}
+          when NativeModernMetadata =:=
+                 #{otp_doc_vsn => {1, 0, 0}, behaviours => [],
+                   source_anno => {1, 2},
+                   source_path => ExpectedModernPath},
+               NativeModernShowMetadata =:= #{source_anno => {14, 1}} ->
+            present;
+        OtherNativeSourceMetadata ->
+            erlang:error({unexpected_modern_source_metadata,
+                          OtherNativeSourceMetadata})
+    end.
+
+assert_native_modern_source_html(Html, Docset, Root, SourceBase) ->
+    case native_modern_source_state(Docset, Root) of
+        absent ->
+            ?assertEqual(nomatch, binary:match(Html, <<"class=\"source\"">>));
+        present ->
+            ?assert(binary:match(
+                      Html, <<SourceBase/binary,
+                              "ldoc_modern.erl#L1">>) =/= nomatch),
+            ?assert(binary:match(
+                      Html, <<SourceBase/binary,
+                              "ldoc_modern.erl#L14">>) =/= nomatch)
+    end.
 
 analysis_authored_source_fixture(Root, Docset) ->
     ModulePath = filename:join([Root, "src", "ldoc_modern.erl"]),
