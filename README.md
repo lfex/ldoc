@@ -4,6 +4,57 @@ ldoc collects API documentation for Erlang, modern LFE, and classic LFE from tru
 
 `read-docs/1` reads embedded EEP-48 `Docs` only. Both readers return the same module map shape and work from the supplied artifact without loading the target module or searching the code path.
 
+## Build a local reference
+
+After installing Erlang/OTP, rebar3, and a full OTP EDoc installation, build
+and install the standalone command from this checkout:
+
+```sh
+make check
+make install PREFIX="$HOME/.local"
+"$HOME/.local/bin/ldoc" --help
+```
+
+From a trusted flat single-application checkout, run:
+
+```sh
+"$HOME/.local/bin/ldoc" build "$PWD" \
+  --output "$PWD/_build/default/ldoc-1.2.0" \
+  --source-root "$PWD" \
+  --source-base "https://example.test/my-app/"
+```
+
+The output root must be new, and its parent directory must already exist.
+Open `_build/default/ldoc-1.2.0/site/index.html`. Use a new versioned output
+directory for another run; ldoc never replaces an existing path. The root retains
+the staged package BEAMs and readable native snapshot used for that site.
+Without `--overview`, ldoc uses the project's `README.md` when present. The
+source root and source base are explicit caller declarations; ldoc does not
+infer a repository host or revision.
+
+The command owns the ordinary `rebar3 compile` step and accepts one root
+`src/*.app.src` plus nonempty, direct `src/*.erl` and `src/*.lfe` module files
+under the default `_build/default/lib/APP/ebin` layout. Umbrella, nested,
+custom-layout, and non-default-profile builds are not supported by this
+command. It verifies that source modules, the compiled application module
+list, and compiled BEAM files agree before claiming the output path.
+
+Embedded Docs chunks remain authoritative. For an Erlang module without one,
+the command generates a fresh EDoc chunk in its owned output package from the
+matching source and available compile-time include and macro context; ldoc's
+`collect/2` records that conversion declaration but does not run EDoc itself.
+EDoc generation errors are reported with the source path, and the newly owned
+partial output is retained for diagnosis. Unsupported preprocessing contexts
+and unavailable EDoc chunk tools fail visibly.
+
+`ldoc build PROJECT --output FRESH_ROOT --overview FILE --namespace TEXT
+--package TEXT --source-root ROOT --source-base URL` lists the optional
+arguments. Namespace defaults to `local`; package and exact version default to
+the compiled application identity. Paths containing spaces are supported.
+The LFE dependency hook in the pinned rebar3_lfe toolchain may have its own
+space-path limitation, so that separate dependency behavior should be checked
+for the chosen project.
+
 ```erlang
 'ldoc-beam':'read-docs'("_build/default/lib/my_app/ebin/my_module.beam").
 'ldoc-beam':collect("_build/default/lib/my_app/ebin/my_module.beam").
