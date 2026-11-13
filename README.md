@@ -19,18 +19,21 @@ From a trusted flat single-application checkout, run:
 
 ```sh
 "$HOME/.local/bin/ldoc" build "$PWD" \
-  --output "$PWD/_build/default/ldoc-1.2.0" \
+  --output "$PWD/ldoc-1.2.0" \
   --source-root "$PWD" \
   --source-base "https://example.test/my-app/"
 ```
 
 The output root must be new, and its parent directory must already exist.
-Open `_build/default/ldoc-1.2.0/site/index.html`. Use a new versioned output
-directory for another run; ldoc never replaces an existing path. The root retains
-the staged package BEAMs and readable native snapshot used for that site.
+Open `ldoc-1.2.0/site/index.html`. The `1.2.0` part is a caller-chosen output
+directory label; the exact release version in the reference comes from the
+compiled application. Use another fresh output directory for another run;
+ldoc never replaces an existing path. The root retains the staged package
+BEAMs and readable native snapshot used for that site.
 Without `--overview`, ldoc uses the project's `README.md` when present. The
 source root and source base are explicit caller declarations; ldoc does not
-infer a repository host or revision.
+infer or verify a repository host or revision. The example source-base URL is
+illustrative and does not authenticate source provenance.
 
 The command owns the ordinary `rebar3 compile` step and accepts one root
 `src/*.app.src` plus nonempty, direct `src/*.erl` and `src/*.lfe` module files
