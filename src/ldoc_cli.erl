@@ -1,10 +1,24 @@
 %% A standalone command for building a trusted flat local application.
 -module(ldoc_cli).
 
+-moduledoc """
+Build a local reference site and native EEP-48 snapshot from a flat rebar3
+application. The command compiles the project as a child process and does not
+load or start the target application.
+""".
+
 -include_lib("kernel/include/file.hrl").
 
 -export([main/1, run/1]).
 
+-doc """
+Run the command-line entry point for `ldoc`.
+
+`Args` contains the escript arguments. This function prints help or the
+published index path to standard output, writes diagnostics to standard error,
+and halts with status 0, 1, or 2. It is the only API function that halts the
+BEAM process.
+""".
 -spec main([string()]) -> no_return().
 main(Args) ->
     case run(Args) of
@@ -16,7 +30,7 @@ main(Args) ->
                          "--source-base URL\n"),
             halt(0);
         {ok, Index} ->
-            io:put_chars([Index, "\n"]),
+            io:put_chars([Index, <<"\n">>]),
             halt(0);
         {error, {usage, Reason}} ->
             io:put_chars(standard_error,
@@ -30,7 +44,18 @@ main(Args) ->
             halt(1)
     end.
 
--spec run([string()]) -> {ok, help | string()} | {error, term()}.
+-doc """
+Run one command without halting the caller.
+
+Accepts escript arguments including `--help` or `build PROJECT --output ROOT`
+and the documented optional build settings. On success returns `{ok, help}`
+for help or `{ok, IndexBinary}` containing the absolute `site/index.html`
+path. On expected failures it returns `{error, Reason}`. A build starts ldoc's
+own required applications, compiles the target with a child `rebar3` process,
+may create a fresh output tree, and writes child progress to standard error;
+it never starts or loads the target application.
+""".
+-spec run([string()]) -> {ok, help | binary()} | {error, term()}.
 run(["--help"]) -> {ok, help};
 run(["help"]) -> {ok, help};
 run(["build" | Args]) ->
@@ -41,7 +66,10 @@ run(["build" | Args]) ->
 run(_) -> {error, {usage, expected_build}}.
 
 parse_build_args([Project | Args]) when Project =/= "", Project =/= "--output" ->
-    parse_options(Args, #{project => Project}, []);
+    case lists:prefix("--", Project) of
+        true -> {error, missing_project};
+        false -> parse_options(Args, #{project => Project}, [])
+    end;
 
 parse_build_args(_) -> {error, missing_project}.
 
@@ -208,7 +236,20 @@ compile_project(Project) ->
             Port = open_port({spawn_executable, Rebar3},
                              [binary, exit_status, use_stdio, stderr_to_stdout,
                               {args, ["compile"]}, {cd, Project}, {line, 4096}]),
-            wait_compile(Port, Project)
+            try wait_compile(Port, Project)
+            after close_compile_port(Port)
+            end
+    end.
+
+close_compile_port(Port) ->
+    case erlang:port_info(Port) of
+        undefined -> ok;
+        _ ->
+            try port_close(Port) of
+                true -> ok
+            catch
+                error:badarg -> ok
+            end
     end.
 
 wait_compile(Port, Project) ->
@@ -221,9 +262,6 @@ wait_compile(Port, Project) ->
             wait_compile(Port, Project);
         {Port, {exit_status, 0}} -> ok;
         {Port, {exit_status, Status}} -> {error, {compile, Project, {exit_status, Status}}}
-    after 3600000 ->
-        catch port_close(Port),
-        {error, {compile, Project, timeout}}
     end.
 
 build_compiled(Project, Output, Sources, AppSrc, Overview, ReleaseSeed, SiteOptions) ->
@@ -323,9 +361,8 @@ package_binary(undefined, Package) -> unicode:characters_to_binary(Package);
 package_binary(Package, _Default) -> unicode:characters_to_binary(Package).
 
 claimed_build(Project, Output, Sources, App, Release, Overview, SiteOptions) ->
-    Package = binary_to_list(maps:get(package, Release)),
-    Ebin = filename:join([Output, Package, "ebin"]),
-    Doc = filename:join([Output, Package, "doc"]),
+    Ebin = filename:join([Output, "package", "ebin"]),
+    Doc = filename:join([Output, "package", "doc"]),
     case {filelib:ensure_dir(filename:join(Ebin, "placeholder")),
           filelib:ensure_dir(filename:join(Doc, "placeholder"))} of
         {{error, Reason}, _} -> {error, {stage, package_ebin, Ebin, Reason, Output}};
@@ -406,12 +443,19 @@ edoc_context(Bytes, Project) ->
                 false ->
                     Includes0 = [filename:absname(Path, Project) || {i, Path} <- Options],
                     ProjectInclude = filename:join(Project, "include"),
-                    Includes = lists:usort([P || P <- [ProjectInclude | Includes0], filelib:is_dir(P)]),
-                    Macros = lists:usort([edoc_macro(Option) || Option <- Options,
-                                          is_edoc_macro(Option)]),
+                    Includes = append_existing(ProjectInclude,
+                                                [P || P <- Includes0, filelib:is_dir(P)]),
+                    Macros = [edoc_macro(Option) || Option <- Options,
+                                                    is_edoc_macro(Option)],
                     {ok, Includes, Macros}
             end;
         _ -> {error, unsupported_compile_context}
+    end.
+
+append_existing(Path, Paths) ->
+    case filelib:is_dir(Path) andalso not lists:member(Path, Paths) of
+        true -> Paths ++ [Path];
+        false -> Paths
     end.
 
 is_edoc_macro({d, Name}) when is_atom(Name) -> true;
@@ -460,7 +504,7 @@ publish_site(Output, Release, Overview, SiteOptions, Docset) ->
                     Spec = optional_map(source_base, maps:get(source_base, SiteOptions), Spec1),
                     Site = filename:join(Output, "site"),
                     case 'ldoc-site':build(Snapshots, [Spec], Site) of
-                        {ok, Index} -> {ok, binary_to_list(Index)};
+                        {ok, Index} -> {ok, Index};
                         {error, Reason} -> {error, {stage, site, Output,
                                                    {path, Site, reason, Reason}}}
                     end;

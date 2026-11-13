@@ -20,7 +20,10 @@ test:
 cli:
 	$(REBAR3) lfe escriptize
 
-check: compile test cli
+check:
+	$(MAKE) compile
+	$(MAKE) test
+	$(MAKE) cli
 
 install: cli
 	mkdir -p "$(PREFIX)/bin"
