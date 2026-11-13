@@ -2595,6 +2595,7 @@ analysis_sources(Temp, Docset, DefaultView) ->
             ?assertEqual(#{path => <<"ldoc_modern.erl">>, line => 14},
                          maps:get(source, ModernShow))
     end,
+    analysis_native_source_classifier_negative(Root, Docset),
     analysis_authored_source_fixture(Root, Docset),
     Classic = view_module(Sourced, <<"erlang">>, <<"ldoc_classic">>),
     ?assertEqual(#{path => <<"ldoc_classic.erl">>, line => 2},
@@ -2805,7 +2806,8 @@ native_modern_source_state(Docset, Root) ->
     ExpectedModernPath = filename:join(Root, "ldoc_modern.erl"),
     case {NativeModernMetadata, NativeModernShowMetadata} of
         {#{otp_doc_vsn := {1, 0, 0}}, #{}}
-          when NativeModernMetadata =:= #{otp_doc_vsn => {1, 0, 0}} ->
+          when NativeModernMetadata =:= #{otp_doc_vsn => {1, 0, 0}},
+               NativeModernShowMetadata =:= #{} ->
             absent;
         {#{otp_doc_vsn := {1, 0, 0}, behaviours := [],
            source_anno := {1, 2}, source_path := ExpectedModernPath},
@@ -2820,6 +2822,29 @@ native_modern_source_state(Docset, Root) ->
             erlang:error({unexpected_modern_source_metadata,
                           OtherNativeSourceMetadata})
     end.
+
+analysis_native_source_classifier_negative(Root, Docset) ->
+    MissingSourceModule = update_module(
+                            fun(Module) ->
+                                Module#{metadata :=
+                                            #{otp_doc_vsn => {1, 0, 0}}}
+                            end, Docset, <<"ldoc_modern">>),
+    UnexpectedShowMetadata = #{unexpected_native_source_metadata => true},
+    UnexpectedShow = map_entry(
+                       fun(Entry) ->
+                           Entry#{metadata := UnexpectedShowMetadata}
+                       end, MissingSourceModule, <<"ldoc_modern">>,
+                       <<"function">>, <<"show">>, 1),
+    Observed = try native_modern_source_state(UnexpectedShow, Root) of
+                   State -> {returned, State}
+               catch
+                   error:Reason -> {raised, Reason}
+               end,
+    ?assertEqual(
+       {raised,
+        {unexpected_modern_source_metadata,
+         {#{otp_doc_vsn => {1, 0, 0}}, UnexpectedShowMetadata}}},
+       Observed).
 
 assert_native_modern_source_html(Html, Docset, Root, SourceBase) ->
     case native_modern_source_state(Docset, Root) of
