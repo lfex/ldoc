@@ -1,6 +1,6 @@
-# LDOC
+# ldoc
 
-LDOC collects API documentation for Erlang, modern LFE, and classic LFE from trusted local BEAM artifacts. `collect/1` looks for an embedded EEP-48 `Docs` chunk, then an associated package sidecar, then the classic LFE `LDoc` chunk in the same BEAM. It falls back only when a source is absent.
+ldoc collects API documentation for Erlang, modern LFE, and classic LFE from trusted local BEAM artifacts. `collect/1` looks for an embedded EEP-48 `Docs` chunk, then an associated package sidecar, then the classic LFE `LDoc` chunk in the same BEAM. It falls back only when a source is absent.
 
 `read-docs/1` reads embedded EEP-48 `Docs` only. Both readers return the same module map shape and work from the supplied artifact without loading the target module or searching the code path.
 
@@ -123,7 +123,7 @@ Options are a map containing only:
 
 The requested locale still selects documentation by exact key, then `und`,
 then the first key in lexical order. A selected body receives an HTML `lang`
-attribute only when the key matches LDOC's conservative subset: a two- or
+attribute only when the key matches ldoc's conservative subset: a two- or
 three-letter primary language, optionally followed by a four-letter script
 and a two-letter or three-digit region. The primary `und` is never annotated.
 Other valid UTF-8 keys still select and render their text without a `lang`
@@ -189,7 +189,7 @@ coordinates and lists their exact versions bytewise. The optional fourth
 argument accepts only `locale`. Every release is prepared before the builder
 claims or changes the output directory.
 
-From the LDOC checkout, start an Erlang shell with `rebar3 shell`; the
+From the ldoc checkout, start an Erlang shell with `rebar3 shell`; the
 compiled application is then available on the code path. Paste the following
 block into that shell:
 
@@ -198,7 +198,7 @@ block into that shell:
 Release1 = #{namespace => <<"local">>, package => <<"site-demo">>,
              version => <<"1.0">>},
 Release2 = Release1#{version := <<"2.0">>},
-%% This runnable demonstration uses one installed LDOC BEAM for both keys.
+%% This runnable demonstration uses one installed ldoc BEAM for both keys.
 %% Real releases should each be assembled from their matching compiled inputs.
 Inputs = [code:which('ldoc-docset')],
 {ok, Docset1} = 'ldoc-docset':assemble(Release1, Inputs),
@@ -258,7 +258,7 @@ original header bytes unless its explicit `version_index` option is true.
 
 The independently authored layout takes measured page organization cues from
 cljdoc's Reitit 0.11.0 reference and the inspected upstream source at
-`74d0cec6bd252321375b68ee3facb8ae8faf3296` (EPL-2.0). LDOC uses no copied
+`74d0cec6bd252321375b68ee3facb8ae8faf3296` (EPL-2.0). ldoc uses no copied
 upstream source or assets.
 
 ## Generate an EEP-48 sidecar with EDoc
@@ -322,6 +322,6 @@ shasum -a 256 "$WORK/source/ldoc-legacy.ldoc"
 
 The expected raw LDoc chunk is 555 bytes with SHA-256 `a4191d04427134e4ffb4e28011f1b97dcff754609b394e6e23e801c1fb2a8ea6`. Compare those extracted bytes with a separately extracted chunk from the shipped BEAM fixture. The full BEAM may differ because compiler metadata records the source path.
 
-For sidecars, LDOC uses the module identity read from the supplied BEAM and checks only the immediate package root above its `ebin` directory. It does not infer identity from the filename, walk ancestors, or consult the VM code path. Embedded docs are authoritative, including `hidden` and `none`; only a missing embedded chunk advances to the sidecar. A malformed embedded chunk remains `invalid_docs` even if a sidecar exists.
+For sidecars, ldoc uses the module identity read from the supplied BEAM and checks only the immediate package root above its `ebin` directory. It does not infer identity from the filename, walk ancestors, or consult the VM code path. Embedded docs are authoritative, including `hidden` and `none`; only a missing embedded chunk advances to the sidecar. A malformed embedded chunk remains `invalid_docs` even if a sidecar exists.
 
 Filesystem errors retain tagged reasons (`read_beam` or `read_sidecar`). Invalid BEAMs, missing docs, invalid docs, invalid package associations, and invalid EDoc provenance have distinct tagged errors. Sidecars contain no module/build identity to authenticate their contents, so collection assumes a trusted package with stable contents. Do not use this reader for hostile or public artifacts; atom creation and resource bounds need a separate isolation design.

@@ -345,7 +345,7 @@
 
 (defun catalogue-bytes (specs)
   (iolist_to_binary
-    (list #b("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Release catalogue · LDOC</title><link rel=\"stylesheet\" href=\"ldoc.css\"></head><body><a class=\"skip\" href=\"#main\">Skip to content</a><header class=\"top\"><span class=\"library\">LDOC</span><span class=\"version\">Release catalogue</span><span class=\"brand-mark\">LDOC</span></header><main id=\"main\" class=\"content\" tabindex=\"-1\"><article class=\"overview-content\"><h1>Release catalogue</h1>")
+    (list #b("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Release catalogue · ldoc</title><link rel=\"stylesheet\" href=\"ldoc.css\"></head><body><a class=\"skip\" href=\"#main\">Skip to content</a><header class=\"top\"><span class=\"library\">ldoc</span><span class=\"version\">Release catalogue</span><span class=\"brand-mark\">ldoc</span></header><main id=\"main\" class=\"content\" tabindex=\"-1\"><article class=\"overview-content\"><h1>Release catalogue</h1>")
           (catalogue-groups specs)
           #b("</article></main></body></html>"))))
 
