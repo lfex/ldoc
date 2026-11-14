@@ -6,6 +6,8 @@
 
 (defspec (prepare 2)
   ([(term) (term)] (UNION (tuple 'ok (list)) (tuple 'error (term)))))
+(defspec (prepare-graph 1)
+  ([(list)] (UNION (tuple 'ok (map)) (tuple 'error (term)))))
 (defspec (route 1)
   ([(binary)] (binary)))
 (defspec (canonical-path 1)
@@ -116,7 +118,12 @@
                 (not (=:= (string:trim title) #b()))))))))
 
 (defun prepare-graph (documents)
-  "Allocate page-wide heading IDs, then resolve all selected local links."
+  "Prepare contexts from ordered, already-selected document maps.
+Each map must contain a unique canonical logical `path`, its assigned output
+`route`, and a UTF-8 `body` binary or ordered UTF-8 `blocks` binaries. Callers
+validate and NFC-normalise page identities before this internal operation.
+Returns a path-to-context map or an option/documentation-link error; performs
+no file or network IO."
   (case (index-documents documents #m() #m())
     (`#(error ,reason) `#(error ,reason))
     (`#(ok ,indexed)

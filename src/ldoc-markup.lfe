@@ -62,9 +62,11 @@ fetching is provided."
     (_ (render-unknown value))))
 
 (defun render (format value context)
-  "Render Markdown with validated per-document heading IDs and href mappings.
-CONTEXT is internal renderer data; hrefs absent from its link map retain the
-legacy safe-link policy."
+  "Render Markdown with prepared per-document heading IDs and href mappings.
+CONTEXT is an internal map from `ldoc-pages:prepare-graph/1`, containing a
+heading-ID list, a resolved local-href map, and optional integer offsets/counts.
+Other hrefs retain the legacy safe-link policy; malformed or untrusted context
+data returns `invalid_documentation`."
   (case format
     (#b("text/markdown")
      (if (valid-context? context)
@@ -84,12 +86,15 @@ legacy safe-link policy."
                (valid-heading-offset? context))))))))
 (defun valid-heading-offset? (context)
   (let* ((offset (maps:get 'heading_offset context 0))
-         (count (maps:get 'heading_count context (- (length (maps:get 'headings context ())) offset))))
-    (andalso (is_integer offset)
-      (andalso (>= offset 0)
-        (andalso (is_integer count)
-          (andalso (>= count 0)
-            (=< (+ offset count) (length (maps:get 'headings context ())))))))))
+         (heading-total (length (maps:get 'headings context ()))))
+    (if (andalso (is_integer offset)
+                 (andalso (>= offset 0) (=< offset heading-total)))
+        (let ((count (case (maps:find 'heading_count context)
+                       ('error (- heading-total offset))
+                       (`#(ok ,value) value))))
+          (andalso (is_integer count)
+            (andalso (>= count 0) (=< (+ offset count) heading-total))))
+        'false)))
 (defun valid-heading-id? (id)
   (andalso (is_binary id)
     (andalso (>= (byte_size id) 3)

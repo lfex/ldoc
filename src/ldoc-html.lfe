@@ -576,14 +576,18 @@ paragraph bidi policy."
 (defun release-title (release)
   (iolist_to_binary (list (library-coordinate release) #b(" ")
                           (maps:get 'version release))))
-(defun filter-control ()
-  #b("<div class=\"filter-control\"><label for=\"api-filter\" hidden>Filter API navigation</label><input id=\"api-filter\" class=\"filter\" data-filter hidden type=\"search\" autocomplete=\"off\"><button class=\"filter-clear\" data-filter-clear hidden type=\"button\">Clear filter</button><p class=\"status\" data-filter-status aria-live=\"polite\"></p></div>"))
+(defun filter-control (pages)
+  (case pages
+    ('absent
+     #b("<div class=\"filter-control\"><label for=\"api-filter\" hidden>Filter API navigation</label><input id=\"api-filter\" class=\"filter\" data-filter hidden type=\"search\" autocomplete=\"off\"><button class=\"filter-clear\" data-filter-clear hidden type=\"button\">Clear filter</button><p class=\"status\" data-filter-status aria-live=\"polite\"></p></div>"))
+    (_
+     #b("<div class=\"filter-control\"><label for=\"api-filter\" hidden>Filter documentation navigation</label><input id=\"api-filter\" class=\"filter\" data-filter hidden type=\"search\" autocomplete=\"off\"><button class=\"filter-clear\" data-filter-clear hidden type=\"button\">Clear filter</button><p class=\"status\" data-filter-status aria-live=\"polite\"></p></div>"))))
 (defun navigation-panel (languages current-item)
   (navigation-panel languages current-item 'absent 'none))
 (defun navigation-panel (languages current-item pages current-page)
   (list #b("<nav id=\"api-navigation\" class=\"nav-panel\" data-navigation aria-label=\"API navigation\">")
         #b("<div class=\"nav-columns\"><div class=\"primary-nav\">")
-        (filter-control)
+        (filter-control pages)
         #b("<p class=\"nav-title\">Browse</p><ul class=\"nav-list\"><li data-filter-item><a href=\"index.html\"")
         (if (andalso (=:= current-item 'none) (=:= current-page 'none))
             #b(" aria-current=\"page\"") #b())

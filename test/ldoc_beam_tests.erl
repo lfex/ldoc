@@ -1327,6 +1327,12 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
     {ok, View1} = 'ldoc-analysis':view(Retrieved1),
     {ok, View2} = 'ldoc-analysis':view(Retrieved2),
     {ok, Bundle} = 'ldoc-html':render(View1),
+    DefaultIndex = proplists:get_value(<<"index.html">>, Bundle),
+    ?assert(binary:match(DefaultIndex, <<">Filter API navigation</label>">>) =/= nomatch),
+    {ok, EmptyPagesBundle} = 'ldoc-html':render(View1, #{pages => []}),
+    EmptyPagesIndex = proplists:get_value(<<"index.html">>, EmptyPagesBundle),
+    ?assert(binary:match(EmptyPagesIndex,
+                         <<">Filter documentation navigation</label>">>) =/= nomatch),
     PageSpec = #{path => <<"docs/guide.md">>, title => <<"Guide"/utf8>>,
                  body => <<"# Start here\n\n## Same\n\n## Same\n\n## Same-1\n\n[second](#same-1) **[overview](../README.md#home)**.">>},
     ?assert('ldoc-html':'valid-options?'(#{pages => [PageSpec], overview => <<"# Home">>})),
@@ -1437,6 +1443,9 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
         ?assertMatch({ok, _}, 'ldoc-markup':render(
                                 <<"text/markdown">>, <<"# Pure">>,
                                 #{headings => [<<"h-pure">>], links => #{}})),
+        ?assertEqual({error, invalid_documentation}, 'ldoc-markup':render(
+          <<"text/markdown">>, <<"# Heading">>,
+          #{headings => [<<"h-heading">>], links => #{}, heading_offset => bad})),
         ?assertEqual({error, invalid_documentation}, 'ldoc-markup':render(
           <<"text/markdown">>, <<"[unsafe](x)">>,
           #{headings => [], links => #{<<"x">> => <<"javascript:alert(1)">>}})),
@@ -2154,6 +2163,14 @@ analysis_app_contract() ->
     assert_native_boolean_spec('ldoc-docset', 'valid-release?', 1),
     assert_native_boolean_spec('ldoc-analysis', 'valid-options?', 1),
     assert_native_boolean_spec('ldoc-html', 'valid-options?', 1),
+    lists:foreach(fun({Module, Name, Arity}) ->
+        assert_native_spec(Module, Name, Arity)
+    end, [{'ldoc-pages', prepare, 2},
+          {'ldoc-pages', 'prepare-graph', 1},
+          {'ldoc-pages', route, 1},
+          {'ldoc-pages', 'canonical-path', 1},
+          {'ldoc-markup', scan, 1},
+          {'ldoc-markup', render, 3}]),
     ?assert('ldoc-docset':'valid-release?'(
               #{namespace => <<"local">>, package => <<"pkg">>, version => <<"1">>})),
     ?assertNot('ldoc-docset':'valid-release?'(
@@ -2174,6 +2191,16 @@ assert_native_boolean_spec(Module, Name, Arity) ->
     [{type, _, 'fun', [{type, _, product, _Args}, ReturnType]}] = SpecForms,
     ?assertMatch({type, _, boolean, []}, ReturnType),
     ?assertNotMatch({atom, _, boolean}, ReturnType).
+
+assert_native_spec(Module, Name, Arity) ->
+    Beam = code:which(Module),
+    {ok, {Module, [{abstract_code, {raw_abstract_v1, Forms}}]}} =
+        beam_lib:chunks(Beam, [abstract_code]),
+    [SpecForms] = [Types ||
+                      {attribute, _, spec, {{SpecName, SpecArity}, Types}} <- Forms,
+                      SpecName =:= Name, SpecArity =:= Arity],
+    [{type, _, 'fun', [{type, _, product, Args}, _ReturnType]}] = SpecForms,
+    ?assertEqual(Arity, length(Args)).
 
 site_s01_s06(Temp, StoreRoot, Retrieved1, Retrieved2, View1, View2) ->
     Release1 = maps:get(release, Retrieved1),
