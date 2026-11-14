@@ -7,20 +7,31 @@ reference. The output is useful offline and does not require a hosted service.
 
 ## Build a project reference
 
-Configure ldoc as a development-only project plugin, then run `rebar3 ldoc` in
-an ordinary flat Erlang or LFE project:
+For an Erlang project, configure ldoc as a development-only plugin:
 
-```sh
+```erlang
 {project_plugins, [{ldoc, "0.1.1"}]}.
 ```
 
-The stable index is `_build/default/ldoc/current/site/index.html`. Successful
-generations are retained and `current` switches only after a successful build.
-The plugin output is separate from maintainer docs under `_build/ldoc/docs.*`.
-After Rebar is killed, inspect `.ldoc-lock` and confirm no build remains active
-before removing a stale lock. The filesystem must support relative symlinks.
-Only the default profile is supported. LFE projects still configure the LFE
-runtime dependency and compiler plugin in their normal `deps` and `plugins`.
+For LFE, keep its normal runtime and compiler configuration:
+
+```erlang
+{deps, [{lfe, "2.2.2"}]}.
+{plugins, [{rebar3_lfe, "0.5.8"}]}.
+{project_plugins, [{ldoc, "0.1.1"}]}.
+```
+
+Run `rebar3 ldoc` and open
+`_build/default/ldoc/current/site/index.html`. ldoc is development-only, not a
+runtime dependency of the documented application.
+
+### Advanced output behavior
+
+Successful generations are retained and `current` switches only after a
+successful build. The plugin output is separate from maintainer docs under
+`_build/ldoc/docs.*`. After Rebar is killed, inspect `.ldoc-lock` and confirm
+no build remains active before removing a stale lock. The filesystem must
+support relative symlinks. Only the default profile is supported.
 
 For a separate destination, choose a fresh output root:
 

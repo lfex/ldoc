@@ -7,7 +7,12 @@ real_provider_generation_test_() ->
     {timeout, 240, fun real_provider_generation/0}.
 
 real_provider_generation() ->
-    Workspace = filename:join(["/private/tmp", "ldoc-plugin-tests-" ++
+    TempBase = case os:getenv("TMPDIR") of
+        false -> "/tmp";
+        "" -> "/tmp";
+        Path -> Path
+    end,
+    Workspace = filename:join([TempBase, "ldoc-plugin-tests-" ++
                                 integer_to_list(erlang:unique_integer([positive]))]),
     Root = filename:join(Workspace, "consumer"),
     try
@@ -17,29 +22,34 @@ real_provider_generation() ->
         ?assert(Rebar =/= false),
         Git = os:find_executable("git"),
         ?assert(Git =/= false),
-        {ok, Revision} = command(Git, ["rev-parse", "HEAD"], SourceRoot),
-        Plugin = "{ldoc, {git, \"file://" ++ SourceRoot ++
-                 "\", {ref, \"" ++ string:trim(binary_to_list(Revision)) ++ "\"}}}",
+        PluginSource = filename:join(Workspace, "plugin-source"),
+        ok = make_plugin_source(Git, SourceRoot, PluginSource),
+        Plugin = "{ldoc, {git, \"file://" ++ PluginSource ++
+                 "\", {branch, \"main\"}}}",
         Config = "{project_plugins, [" ++ Plugin ++ "]}.\n",
         ok = file:write_file(filename:join(Root, "rebar.config"), Config),
         create_consumer(Root, "Initial provider documentation."),
         {ok, Help} = command(Rebar, ["help", "ldoc"], Root),
         ?assertNotEqual(nomatch, binary:match(Help, <<"--source-base">>)),
-        {ok, _} = command(Rebar, ["ldoc"], Root),
+        {ok, FirstOutput} = command(Rebar, ["ldoc"], Root),
         Container = filename:join([Root, "_build", "default", "ldoc"]),
         Current = filename:join(Container, "current"),
         {ok, FirstTarget} = file:read_link(Current),
         FirstRef = filename:join([Container, FirstTarget]),
+        ?assertNotEqual(nomatch, binary:match(FirstOutput, <<"current/site/index.html">>)),
         FirstTree = tree(FirstRef),
-        ?assert(tree_contains(FirstRef, <<"Initial provider documentation">>)),
+        ?assert(site_contains(FirstRef, <<"Initial provider documentation">>)),
         create_consumer(Root, "Updated provider documentation with additional words."),
         {ok, _} = command(Rebar, ["ldoc"], Root),
         {ok, SecondTarget} = file:read_link(Current),
         ?assertNotEqual(FirstTarget, SecondTarget),
         ?assertEqual(FirstTree, tree(FirstRef)),
         SecondRef = filename:join([Container, SecondTarget]),
-        ?assertEqual(true, tree_contains(SecondRef,
-                                         <<"Updated provider documentation">>)),
+        ?assert(site_contains(SecondRef, <<"Updated provider documentation">>)),
+        ExplicitOutput = filename:join(Workspace, "explicit-output"),
+        {ok, _} = command(Rebar, ["ldoc", "--output", ExplicitOutput], Root),
+        ?assert(filelib:is_regular(filename:join([ExplicitOutput, "site", "index.html"]))),
+        ?assertMatch({error, _}, command(Rebar, ["ldoc", "--output", ExplicitOutput], Root)),
         {ok, GenerationBeforeFailure} = file:read_link(Current),
         GoodTree = tree(filename:join([Container, GenerationBeforeFailure])),
         ok = file:write_file(filename:join([Root, "src", "plugin_fixture.erl"]),
@@ -60,7 +70,9 @@ real_provider_generation() ->
                      tree(filename:join([Container, GenerationBeforeFailure]))),
         ok = file:delete(filename:join([Root, "src", "plugin_fixture.erl"])),
         stale_lock_is_preserved(Rebar, Root, Container, Current, GenerationBeforeFailure),
-        unowned_container_is_preserved(Rebar, Root)
+        invalid_current_is_preserved(Rebar, Root, Workspace, Current),
+        unowned_container_is_preserved(Rebar, Root),
+        symlink_container_is_preserved(Rebar, Root)
     after
         remove_tree(Workspace)
     end.
@@ -97,6 +109,62 @@ unowned_container_is_preserved(Rebar, Root) ->
     ?assertMatch({error, _}, command(Rebar, ["ldoc"], OtherRoot)),
     ?assertEqual({ok, <<"user data">>}, file:read_file(Sentinel)).
 
+invalid_current_is_preserved(Rebar, Root, Workspace, Current) ->
+    Outside = filename:join(Workspace, "outside-target"),
+    ok = file:write_file(Outside, <<"outside bytes">>),
+    ok = file:delete(Current),
+    ok = file:make_symlink(Outside, Current),
+    ?assertMatch({error, _}, command(Rebar, ["ldoc"], Root)),
+    ?assertEqual({ok, Outside}, file:read_link(Current)),
+    ?assertEqual({ok, <<"outside bytes">>}, file:read_file(Outside)).
+
+symlink_container_is_preserved(Rebar, Root) ->
+    OtherRoot = filename:join(filename:dirname(Root), "symlink-consumer"),
+    ok = filelib:ensure_dir(filename:join(OtherRoot, "src/placeholder")),
+    {ok, Config} = file:read_file(filename:join(Root, "rebar.config")),
+    ok = file:write_file(filename:join(OtherRoot, "rebar.config"), Config),
+    create_consumer(OtherRoot, "Symlink fixture."),
+    BuildDefault = filename:join([OtherRoot, "_build", "default"]),
+    ok = filelib:ensure_dir(filename:join(BuildDefault, "placeholder")),
+    Container = filename:join(BuildDefault, "ldoc"),
+    External = filename:join(filename:dirname(Root), "external-container"),
+    ok = filelib:ensure_dir(filename:join(External, "sentinel/keep")),
+    Sentinel = filename:join([External, "sentinel", "keep"]),
+    ok = file:write_file(Sentinel, <<"external bytes">>),
+    ok = file:make_symlink(External, Container),
+    ?assertMatch({error, _}, command(Rebar, ["ldoc"], OtherRoot)),
+    ?assertEqual({ok, <<"external bytes">>}, file:read_file(Sentinel)).
+
+make_plugin_source(Git, SourceRoot, PluginSource) ->
+    ok = file:make_dir(PluginSource),
+    lists:foreach(fun(Name) ->
+        Source = filename:join(SourceRoot, Name),
+        Target = filename:join(PluginSource, Name),
+        case file:read_link_info(Source) of
+            {ok, #file_info{type = directory}} -> copy_dir(Source, Target);
+            {ok, #file_info{type = regular}} -> {ok, _} = file:copy(Source, Target)
+        end
+    end, ["src", "rebar.config", "rebar.lock"]),
+    {ok, _} = command(Git, ["init", "-b", "main"], PluginSource),
+    {ok, _} = command(Git, ["config", "user.name", "ldoc plugin test"], PluginSource),
+    {ok, _} = command(Git, ["config", "user.email", "test@example.invalid"], PluginSource),
+    {ok, _} = command(Git, ["add", "src", "rebar.config", "rebar.lock"], PluginSource),
+    {ok, _} = command(Git, ["commit", "-m", "Create source-only plugin fixture"], PluginSource),
+    ok.
+
+copy_dir(Source, Target) ->
+    ok = file:make_dir(Target),
+    {ok, Names} = file:list_dir(Source),
+    lists:foreach(fun(Name) ->
+        From = filename:join(Source, Name),
+        To = filename:join(Target, Name),
+        case file:read_link_info(From) of
+            {ok, #file_info{type = directory}} -> copy_dir(From, To);
+            {ok, #file_info{type = regular}} -> {ok, _} = file:copy(From, To)
+        end
+    end, Names),
+    ok.
+
 command(Executable, Args, Cwd) ->
     Port = open_port({spawn_executable, Executable},
         [binary, exit_status, use_stdio, stderr_to_stdout,
@@ -115,10 +183,11 @@ collect(Port, Acc) ->
 tree(Root) ->
     tree_dir(Root, "").
 
-tree_contains(Root, Bytes) ->
-    lists:any(fun({_Name, Value}) -> is_binary(Value) andalso
-                                    binary:match(Value, Bytes) =/= nomatch
-              end, tree(Root)).
+site_contains(Root, Bytes) ->
+    lists:any(fun({Name, Value}) ->
+        lists:member("site", filename:split(Name)) andalso is_binary(Value) andalso
+        binary:match(Value, Bytes) =/= nomatch
+    end, tree(Root)).
 
 tree_dir(Root, Prefix) ->
     {ok, Names} = file:list_dir(Root),

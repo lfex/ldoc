@@ -38,7 +38,15 @@ help_and_usage(Workspace) ->
     ?assertMatch({error, {runtime, {invalid_rebar3_executable, _}}},
                  ldoc_cli:run(["--help"], #{rebar3 => "relative/rebar3"})),
     ?assertMatch({error, {runtime, {unknown_options, _}}},
-                 ldoc_cli:run(["--help"], #{unexpected => true})).
+                 ldoc_cli:run(["--help"], #{unexpected => true})),
+    ?assertEqual({error, {usage, expected_build}}, ldoc_cli:run(not_a_command)),
+    NoExec = filename:join(Workspace, "not-executable"),
+    ok = file:write_file(NoExec, <<"#!/bin/sh\nexit 0\n">>),
+    ok = file:change_mode(NoExec, 8#644),
+    ?assertMatch({error, {runtime, {invalid_rebar3_executable, NoExec}}},
+                 ldoc_cli:run(["build", ".", "--output",
+                               filename:join(Workspace, "invalid-executor-output")],
+                              #{rebar3 => NoExec})).
 
 prebuild_rejections(Workspace) ->
     Missing = filename:join(Workspace, "missing-project"),

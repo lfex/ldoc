@@ -11,9 +11,8 @@
 -define(GENERATION, <<"ldoc-rebar3-generation-v1\n">>).
 
 -doc "Create the default-namespace, dependency-free ldoc provider.".
--spec init(term()) -> term().
+-spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
 init(State) ->
-    _ = State,
     Providers = providers:create([
         {name, ldoc},
         {module, ?MODULE},
@@ -29,10 +28,10 @@ init(State) ->
                 {source_root, undefined, "source-root", string, "Source link root"},
                 {source_base, undefined, "source-base", string, "Source link base URL"}]}
     ]),
-    Providers.
+    {ok, rebar_state:add_provider(State, Providers)}.
 
 -doc "Build documentation for the current default-profile project.".
--spec do(term()) -> {ok, term()} | {error, {ldoc_prv, term()}}.
+-spec do(rebar_state:t()) -> {ok, rebar_state:t()} | {error, {ldoc_prv, term()}}.
 do(State) ->
     case rebar_state:current_profiles(State) of
         [default] -> do_default(State);
@@ -58,7 +57,7 @@ run_provider(State, Root, Args, Rebar3) ->
                 error ->
                     Container = filename:join([Root, "_build", "default", "ldoc"]),
                     case build_default(Container, Root, Options, Rebar3) of
-                        {ok, _Index} -> {ok, State};
+                        {ok, Index} -> report_success(State, Index);
                         {error, Reason} -> {error, {?MODULE, Reason}}
                     end
             end
@@ -67,9 +66,13 @@ run_provider(State, Root, Args, Rebar3) ->
 run_explicit(State, Root, Output, Options, Rebar3) ->
     Args = build_args(Root, Output, Options),
     case ldoc_cli:run(Args, #{rebar3 => Rebar3}) of
-        {ok, _Index} -> {ok, State};
+        {ok, Index} -> report_success(State, Index);
         {error, Reason} -> {error, {?MODULE, Reason}}
     end.
+
+report_success(State, Index) ->
+    rebar_api:info("ldoc reference: ~ts", [unicode:characters_to_list(Index)]),
+    {ok, State}.
 
 provider_options({[help], []}) -> {error, help_requested};
 provider_options({Options, []}) when is_list(Options) ->
@@ -92,7 +95,7 @@ put_option(Flag, Value, Acc) when is_list(Value), Value =/= [] ->
     Key = option_key(Flag),
     case maps:is_key(Key, Acc) of
         true -> throw({duplicate_option, Flag});
-        false -> maps:put(Key, {Flag, Value}, Acc)
+        false -> maps:put(Key, Value, Acc)
     end;
 put_option(Flag, Value, _Acc) -> throw({invalid_option_value, Flag, Value}).
 
@@ -107,12 +110,18 @@ build_args(Root, Output, Options) ->
     ["build", Root, "--output", Output] ++ option_args(maps:remove(output, Options)).
 
 option_args(Options) ->
-    lists:append([begin {Flag, Value} = maps:get(Key, Options), [Flag, Value] end
+    lists:append([[option_flag(Key), maps:get(Key, Options)]
                   || Key <- [overview, namespace, package, source_root, source_base],
                      maps:is_key(Key, Options)]).
 
+option_flag(overview) -> "--overview";
+option_flag(namespace) -> "--namespace";
+option_flag(package) -> "--package";
+option_flag(source_root) -> "--source-root";
+option_flag(source_base) -> "--source-base".
+
 build_default(Container, Root, Options, Rebar3) ->
-    case ensure_ancestors(filename:dirname(Container)) of
+    case ensure_build_ancestors(Root) of
         ok ->
             case claim_container(Container) of
                 ok -> with_lock(Container, fun() ->
@@ -127,20 +136,23 @@ build_default(Container, Root, Options, Rebar3) ->
         Error -> Error
     end.
 
-ensure_ancestors(Path) ->
+ensure_build_ancestors(Root) ->
+    Build = filename:join(Root, "_build"),
+    Default = filename:join(Build, "default"),
+    case ensure_ordinary_directory(Build) of
+        ok -> ensure_ordinary_directory(Default);
+        Error -> Error
+    end.
+
+ensure_ordinary_directory(Path) ->
     case file:read_link_info(Path) of
         {ok, #file_info{type = directory}} -> ok;
-        {ok, #file_info{type = symlink}} -> {error, {unsafe_ancestor, Path}};
         {ok, _} -> {error, {unsafe_ancestor, Path}};
         {error, enoent} ->
-            Parent = filename:dirname(Path),
-            case ensure_ancestors(Parent) of
-                ok -> case file:make_dir(Path) of
-                    ok -> ok;
-                    {error, eexist} -> ensure_ancestors(Path);
-                    {error, Reason} -> {error, {create_ancestor, Path, Reason}}
-                end;
-                Error -> Error
+            case file:make_dir(Path) of
+                ok -> ok;
+                {error, eexist} -> ensure_ordinary_directory(Path);
+                {error, Reason} -> {error, {create_ancestor, Path, Reason}}
             end;
         {error, Reason} -> {error, {inspect_ancestor, Path, Reason}}
     end.

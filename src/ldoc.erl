@@ -6,6 +6,5 @@
 -export([init/1]).
 
 -doc "Register the ldoc provider in Rebar3 state.".
--spec init(term()) -> {ok, term()}.
-init(State) ->
-    {ok, rebar_state:add_provider(State, ldoc_prv:init(State))}.
+-spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
+init(State) -> ldoc_prv:init(State).

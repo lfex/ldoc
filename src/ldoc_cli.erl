@@ -97,13 +97,14 @@ text have distinct encoding boundaries.
 -spec run([string()]) -> {ok, help | binary()} | {error, term()}.
 run(Args) -> run(Args, #{}).
 
--doc "Run one command with narrowly scoped runtime options. The `rebar3` option injects the absolute executable used for child compilation; absent that key, lookup uses the caller PATH as in `run/1`. No caller environment or VM state is changed.".
+-doc "Run one command with narrowly scoped runtime options. The `rebar3` option injects the absolute executable used for child compilation; absent that key, lookup uses the caller PATH as in `run/1`. Caller environment, code path, IO settings, and native filename encoding are preserved; the caller group leader is restored after EDoc diagnostic redirection. Required ldoc applications are started as for `run/1`.".
 -spec run([string()], map()) -> {ok, help | binary()} | {error, term()}.
 run(Args, RuntimeOptions) when is_list(Args), is_map(RuntimeOptions) ->
     case validate_runtime_options(RuntimeOptions) of
         ok -> run_command(Args, RuntimeOptions);
         {error, Reason} -> {error, Reason}
-    end.
+    end;
+run(_, _) -> {error, {usage, expected_build}}.
 
 run_command(["--help"], _RuntimeOptions) -> {ok, help};
 run_command(["help"], _RuntimeOptions) -> {ok, help};
@@ -122,7 +123,8 @@ validate_runtime_options(RuntimeOptions) ->
 
 validate_runtime_executable(error) -> ok;
 validate_runtime_executable({ok, Path}) when is_list(Path), Path =/= [] ->
-    case filename:pathtype(Path) =:= absolute andalso filelib:is_regular(Path) of
+    case filename:pathtype(Path) =:= absolute andalso filelib:is_regular(Path) andalso
+         os:find_executable(Path) =/= false of
         true -> ok;
         false -> {error, {runtime, {invalid_rebar3_executable, Path}}}
     end;
@@ -301,13 +303,17 @@ compile_project(Project, RuntimeOptions) ->
     case Executable of
         false -> {error, {compile, Project, rebar3_not_found}};
         Rebar3 ->
-            Port = open_port({spawn_executable, Rebar3},
+            try open_port({spawn_executable, Rebar3},
                              [binary, exit_status, use_stdio, stderr_to_stdout,
                               {args, ["compile"]}, {cd, Project},
                               {env, [{"ERL_AFLAGS", child_erlang_aflags()}]},
-                              {line, 4096}]),
-            try wait_compile(Port, Project)
-            after close_compile_port(Port)
+                              {line, 4096}]) of
+                Port ->
+                    try wait_compile(Port, Project)
+                    after close_compile_port(Port)
+                    end
+            catch error:Reason ->
+                {error, {compile, Project, {start_rebar3, Reason}}}
             end
     end.
 
