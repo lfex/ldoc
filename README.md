@@ -1,25 +1,70 @@
 # ldoc
 
-ldoc collects API documentation for Erlang, modern LFE, and classic LFE from trusted local BEAM artifacts. `collect/1` looks for an embedded EEP-48 `Docs` chunk, then an associated package sidecar, then the classic LFE `LDoc` chunk in the same BEAM. It falls back only when a source is absent.
+ldoc collects API documentation for Erlang, modern LFE, and classic LFE from
+trusted local BEAM artifacts. `collect/1` prefers embedded EEP-48 Docs, then
+an associated package sidecar, then classic LFE LDoc from the same BEAM. It
+falls back only when a carrier is absent. `read-docs/1` reads embedded Docs
+only. Neither reader loads the target module or searches the code path.
 
-`read-docs/1` reads embedded EEP-48 `Docs` only. Both readers return the same module map shape and work from the supplied artifact without loading the target module or searching the code path.
+## Install from a published release
 
-## Build a local reference
+The normal user route clones the latest published GitHub release and installs
+the standalone command under an absolute prefix. It needs Git, Make, Erlang/OTP,
+and Rebar3. Rebar3 3.28.0 is the version verified here; this source is tested
+with OTP 27, 28, and 29. Automatic
+latest-release selection also needs `gh` authenticated to GitHub. To skip `gh`,
+set `ldoc_tag` in the calling shell to an actual published tag shown on the
+[ldoc Releases page](https://github.com/lfex/ldoc/releases).
 
-After installing Erlang/OTP, rebar3, and a full OTP EDoc installation, build
-and install the standalone command from this checkout:
+```bash
+(
+  set -eu
+  ldoc_prefix="${PREFIX:-$HOME/.local}"
+  case "$ldoc_prefix" in
+    /*) ;;
+    *) ldoc_prefix="$PWD/$ldoc_prefix" ;;
+  esac
+  ldoc_work="$(mktemp -d /tmp/ldoc-install.XXXXXXXX)"
+  trap 'rm -rf -- "$ldoc_work"' EXIT
+  ldoc_tag="${ldoc_tag:-$(gh release view --repo lfex/ldoc --json tagName --jq '.tagName')}"
+  git clone --depth 1 --branch "$ldoc_tag" https://github.com/lfex/ldoc.git "$ldoc_work/source"
+  make -C "$ldoc_work/source" install PREFIX="$ldoc_prefix"
+)
+export PATH="$HOME/.local/bin:$PATH"
+ldoc --help
+```
+
+This pre-release source has no published ldoc release yet, so the public
+clone-and-install recipe becomes executable after the first release is
+published. The release page is the source for choosing a real tag; do not
+substitute a development branch or commit.
+
+The recipe resolves a relative `PREFIX` to an absolute path before `make -C`
+changes directories, then removes only its unique temporary clone/build root.
+The installed command remains outside that root. The default install is
+`$HOME/.local/bin/ldoc`; for a custom prefix, add that prefix's absolute `bin`
+directory to `PATH`, for example `export PATH="/absolute/prefix/bin:$PATH"`.
+A relative PATH entry may point somewhere else after later directory changes.
+
+### Install from a source checkout
+
+For development, install the current checkout directly. `make check` is a
+separate optional compile-and-test gate, not a prerequisite hidden in the
+install recipe.
 
 ```sh
-make check
 make install PREFIX="$HOME/.local"
 "$HOME/.local/bin/ldoc" --help
 ```
+
+### Build a local reference
 
 From a trusted flat single-application checkout, run:
 
 ```sh
 "$HOME/.local/bin/ldoc" build "$PWD" \
   --output "$PWD/ldoc-1.2.0" \
+  --overview "$PWD/README.md" \
   --source-root "$PWD" \
   --source-base "https://example.test/my-app/"
 ```
@@ -27,13 +72,12 @@ From a trusted flat single-application checkout, run:
 The output root must be new, and its parent directory must already exist.
 Open `ldoc-1.2.0/site/index.html`. The `1.2.0` part is a caller-chosen output
 directory label; the exact release version in the reference comes from the
-compiled application. Use another fresh output directory for another run;
-ldoc never replaces an existing path. The root retains the staged package
-BEAMs and readable native snapshot used for that site.
-Without `--overview`, ldoc uses the project's `README.md` when present. The
-source root and source base are explicit caller declarations; ldoc does not
-infer or verify a repository host or revision. The example source-base URL is
-illustrative and does not authenticate source provenance.
+compiled application resource. Use another fresh output directory for another
+run; ldoc never replaces an existing path. The root retains staged package
+BEAMs and the readable native snapshot used for the site. Without `--overview`,
+ldoc uses the project's `README.md` when present. The source root and source
+base are explicit caller declarations; ldoc does not infer or verify a
+repository host or revision.
 
 The command owns the ordinary `rebar3 compile` step and accepts one root
 `src/*.app.src` plus nonempty, direct `src/*.erl` and `src/*.lfe` module files
@@ -43,20 +87,21 @@ command. It verifies that source modules, the compiled application module
 list, and compiled BEAM files agree before claiming the output path.
 
 Embedded Docs chunks remain authoritative. For an Erlang module without one,
-the command generates a fresh EDoc chunk in its owned output package from the
-matching source and available compile-time include and macro context; ldoc's
-`collect/2` records that conversion declaration but does not run EDoc itself.
-EDoc generation errors are reported with the source path, and the newly owned
-partial output is retained for diagnosis. Unsupported preprocessing contexts
-and unavailable EDoc chunk tools fail visibly.
+the command generates an EDoc chunk in its owned output package from matching
+source and available compile-time include and macro context. `collect/2` records
+a caller-declared EDoc conversion context only when that sidecar is selected;
+it does not run EDoc or authenticate source paths. EDoc generation failures
+retain the newly owned partial output for diagnosis; unsupported preprocessing
+contexts and unavailable EDoc chunk tools fail visibly.
 
 `ldoc build PROJECT --output FRESH_ROOT --overview FILE --namespace TEXT
 --package TEXT --source-root ROOT --source-base URL` lists the optional
 arguments. Namespace defaults to `local`; package and exact version default to
-the compiled application identity. Paths containing spaces are supported.
-The LFE dependency hook in the pinned rebar3_lfe toolchain may have its own
-space-path limitation, so that separate dependency behavior should be checked
-for the chosen project.
+the compiled application identity. The installed command path, install prefix, and generated output paths support
+spaces and Unicode when native filename encoding is UTF-8. A project path used
+for a cold dependency build is subject to the pinned LFE 2.2.2 dependency's
+`app_compile` hook, which constructs a command with an unquoted path; use a
+space-free source/cache/build root for that cold build.
 
 ```erlang
 'ldoc-beam':'read-docs'("_build/default/lib/my_app/ebin/my_module.beam").
@@ -131,8 +176,9 @@ Only recorded source-file provenance beneath that root can produce a
 relative path and a known positive line. This is lexical projection: it does
 not inspect the filesystem, resolve symlinks, verify file existence, or
 authenticate the caller's declaration. It never infers a source from a BEAM
-or sidecar path, and it leaves path-like prose unchanged. Arc 03 can define
-target links from these relative references.
+or sidecar path, and it leaves path-like prose unchanged. A rendered source
+link requires both a selected relative source record and the caller's explicit
+`source_base`; the link does not verify a host, revision, or checkout.
 
 An LFE consumer can traverse the native view without reading collector or
 store internals:

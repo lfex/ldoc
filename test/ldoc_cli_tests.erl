@@ -525,13 +525,81 @@ malformed_edoc_retains_partial_root(Workspace) ->
 
 assert_cli_public_docs() ->
     BeamPath = code:which(ldoc_cli),
-    {ok, Module} = 'ldoc-beam':collect(BeamPath),
-    ?assertNotEqual(none, maps:get(doc, Module)),
-    Entries = maps:get(entries, Module),
-    lists:foreach(fun(Name) ->
-        ?assert(lists:any(fun(Entry) -> maps:get(name, Entry) =:= Name andalso
-                                        maps:get(doc, Entry) =/= none end, Entries))
-    end, [<<"main">>, <<"run">>]).
+    Ebin = filename:dirname(BeamPath),
+    AppPath = filename:join(Ebin, "ldoc.app"),
+    {ok, [{application, ldoc, AppProperties}]} = file:consult(AppPath),
+    {modules, AppModules} = lists:keyfind(modules, 1, AppProperties),
+    ExpectedModules = lists:sort(['ldoc-analysis', 'ldoc-beam', 'ldoc-docset',
+                                  'ldoc-eep48', 'ldoc-etf', 'ldoc-html',
+                                  'ldoc-html-assets', 'ldoc-legacy',
+                                  'ldoc-markup', 'ldoc-site', 'ldoc-store',
+                                  ldoc_cli]),
+    ?assertEqual(ExpectedModules, lists:sort(AppModules)),
+    ExpectedFunctions = lists:sort([
+        {'ldoc-beam', 'read-docs', 1}, {'ldoc-beam', collect, 1},
+        {'ldoc-beam', collect, 2}, {'ldoc-eep48', decode, 3},
+        {'ldoc-etf', decode, 1}, {'ldoc-legacy', decode, 3},
+        {'ldoc-docset', assemble, 2}, {'ldoc-docset', 'valid-release?', 1},
+        {'ldoc-store', get, 2}, {'ldoc-store', put, 2},
+        {'ldoc-analysis', view, 1}, {'ldoc-analysis', view, 2},
+        {'ldoc-analysis', 'valid-options?', 1},
+        {'ldoc-html', render, 1}, {'ldoc-html', render, 2},
+        {'ldoc-html', 'valid-options?', 1},
+        {'ldoc-html-assets', css, 0}, {'ldoc-html-assets', js, 0},
+        {'ldoc-markup', escape, 1}, {'ldoc-markup', render, 2},
+        {'ldoc-site', build, 3}, {'ldoc-site', build, 4},
+        {ldoc_cli, main, 1}, {ldoc_cli, run, 1}]),
+    ExpectedGenerated = lists:sort(lists:append([
+        case Module of
+            ldoc_cli -> [{ldoc_cli, module_info, 0},
+                         {ldoc_cli, module_info, 1}];
+            _ -> [{Module, module_info, 0}, {Module, module_info, 1},
+                  {Module, '__info__', 1},
+                  {Module, 'LFE-EXPAND-EXPORTED-MACRO', 3}]
+        end || Module <- ExpectedModules])),
+    ActualFunctions = lists:append([begin
+        ModuleBeam = filename:join(Ebin, atom_to_list(Module) ++ ".beam"),
+        {ok, {Module, [{exports, Exports}]}} =
+            beam_lib:chunks(ModuleBeam, [exports]),
+        ExportIdentities = [{Module, Name, Arity} || {Name, Arity} <- Exports],
+        Generated = [Identity || Identity <- ExportIdentities,
+                                  lists:member(Identity, ExpectedGenerated)],
+        ?assertEqual(lists:sort([Identity || Identity <- ExpectedGenerated,
+                                              element(1, Identity) =:= Module]),
+                     lists:sort(Generated)),
+        {ok, NativeModule} = 'ldoc-beam':collect(ModuleBeam),
+        ?assert(nonempty_english_doc(maps:get(doc, NativeModule))),
+        Entries = maps:get(entries, NativeModule),
+        CandidateKeys = lists:sort([
+            {Module, binary_to_atom(maps:get(name, Entry), utf8),
+             maps:get(arity, Entry)} || Entry <- Entries,
+            maps:get(kind, Entry) =:= <<"function">>,
+            maps:get(visibility, Entry) =:= candidate]),
+        ModuleFunctions = lists:sort([
+            Identity || Identity = {Owner, _, _} <- ExpectedFunctions,
+                       Owner =:= Module]),
+        ?assertEqual(ModuleFunctions, CandidateKeys),
+        lists:foreach(fun({_Owner, Name, Arity}) ->
+            Entry = hd([Candidate || Candidate <- Entries,
+                maps:get(kind, Candidate) =:= <<"function">>,
+                maps:get(name, Candidate) =:= atom_to_binary(Name, utf8),
+                maps:get(arity, Candidate) =:= Arity,
+                maps:get(visibility, Candidate) =:= candidate]),
+            ?assert(nonempty_english_doc(maps:get(doc, Entry)))
+        end, ModuleFunctions),
+        [Identity || Identity <- ExportIdentities,
+                     not lists:member(Identity, ExpectedGenerated)]
+    end || Module <- ExpectedModules]),
+    ?assertEqual(ExpectedFunctions, lists:sort(ActualFunctions)),
+    ?assertEqual(46, length(ExpectedGenerated)).
+
+nonempty_english_doc(Doc) when is_map(Doc) ->
+    case maps:get(<<"en">>, Doc, <<>>) of
+        Text when is_binary(Text) -> string:trim(Text) =/= <<>>;
+        _ -> false
+    end;
+nonempty_english_doc(_) ->
+    false.
 
 create_malformed_project(Root) ->
     Src = filename:join(Root, "src"),

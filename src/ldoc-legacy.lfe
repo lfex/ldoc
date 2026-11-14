@@ -1,6 +1,8 @@
 ;;;; Normalize the versioned classic LFE LDoc record.
 
 (defmodule ldoc-legacy
+  "Normalize supported versioned classic LFE LDoc records while retaining their
+source lines, patterns, export flags, and source declaration."
   (export
    (decode 3)))
 
@@ -9,6 +11,16 @@
    (UNION (tuple 'ok (map)) (tuple 'error 'invalid_ldoc))))
 
 (defun decode (module source chunk-bytes)
+  "Normalize CHUNK-BYTES as a supported `lfe_docs_v1` record for MODULE.
+
+The complete ETF term must contain proper binary module/doc lines and
+supported function or macro entries with valid patterns, export flags,
+positive source lines, and unique identities. Original lines, patterns, and
+export metadata are retained; lines are joined with newlines under
+`und`, and empty text becomes `none`. SOURCE is copied through as a
+declaration, not authenticated. Module annotation is `undefined`, and macro
+arity remains `unknown`. Success returns `{ok, ModuleMap}`; malformed ETF or record
+data returns `{error, invalid_ldoc}`. Pattern data is never executed; no files are read."
   (case (ldoc-etf:decode chunk-bytes)
     (`#(ok ,term)
      (normalize module source term))

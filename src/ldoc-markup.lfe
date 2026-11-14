@@ -1,6 +1,8 @@
 ;;;; Safe, bounded documentation rendering for static HTML.
 
 (defmodule ldoc-markup
+  "Escape text and render a bounded safe Markdown and structured EDoc subset
+for the static HTML reference."
   (export
    (escape 1)
    (render 2)))
@@ -14,7 +16,12 @@
           (tuple 'error 'invalid_documentation))))
 
 (defun escape (text)
-  "Escape validated UTF-8 text for HTML text or a quoted attribute."
+  "Escape HTML-special characters in caller-supplied UTF-8 TEXT for safe text
+or quoted-attribute placement.
+
+The input is returned as an escaped binary. This is not a UTF-8 validator,
+URL sanitizer, or redactor; callers must establish the input boundary."
+
   (let* ((amp (binary:replace text #b("&") #b("&amp;") (list 'global)))
          (less (binary:replace amp #b("<") #b("&lt;") (list 'global)))
          (greater (binary:replace less #b(">") #b("&gt;") (list 'global)))
@@ -22,7 +29,17 @@
     (binary:replace double #b("'") #b("&#39;") (list 'global))))
 
 (defun render (format value)
-  "Render safe Markdown or structured EDoc; preserve unsupported data as text."
+  "Render VALUE according to FORMAT using the supported safe documentation
+subset.
+
+UTF-8 Markdown supports documented common blocks and inline forms;
+unsupported Markdown remains readable text and raw HTML is escaped.
+Structured `application/erlang+html` values are checked against the allowlisted
+node/attribute tree. Unknown native formats are safely printed and escaped.
+Success returns `{ok, HtmlBinary}`; invalid UTF-8 Markdown or invalid structured EDoc
+returns `{error, invalid_documentation}`. No full CommonMark, raw HTML execution, or remote asset
+fetching is provided."
+
   (case format
     (#b("text/markdown")
      (case value

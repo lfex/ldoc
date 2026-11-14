@@ -17,7 +17,7 @@ compile:
 test:
 	$(REBAR3) eunit
 
-cli:
+cli: compile
 	$(REBAR3) lfe escriptize
 
 check:

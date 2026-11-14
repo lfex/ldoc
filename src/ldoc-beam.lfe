@@ -1,6 +1,9 @@
 ;;;; Read EEP-48 documentation from explicit BEAM artifacts.
 
 (defmodule ldoc-beam
+  "Read trusted BEAM documentation carriers with explicit precedence and
+package-sidecar association. Collection reads files but never loads the
+target module or searches the code path."
   (export
    (read-docs 1)
    (collect 1)
@@ -34,21 +37,47 @@
                         'invalid_edoc_provenance)))))
 
 (defun read-docs (path)
-  "Read embedded Docs metadata from a trusted local BEAM file."
+  "Read the embedded EEP-48 `Docs` chunk from the supplied trusted BEAM
+path.
+
+PATH is a nonempty binary or character-list filename. The function reads
+that file and does not load its module, search the code path, or fall back
+to another carrier. It returns `{ok, ModuleMap}` or `{error, Reason}`; read failures are
+tagged `read_beam`, while malformed BEAM, absent Docs, and unsupported Docs
+data return `invalid_beam`, `missing_docs`, or `invalid_docs`."
+
   (case (read-artifact path)
     (`#(missing ,_module ,_beam)
      '#(error missing_docs))
     (result result)))
 
 (defun collect (path)
-  "Collect documentation from a trusted local BEAM path.
+  "Collect documentation from PATH using embedded Docs, its associated
+immediate-package sidecar, then classic LDoc embedded in the same BEAM.
 
-  Try embedded EEP-48 Docs, the associated package sidecar, then classic LFE
-  LDoc in the same BEAM. Fall back only when a source is absent."
+PATH is a nonempty binary or character-list filename. A later carrier is
+tried only when an earlier carrier is absent; a present malformed carrier is
+an error. Sidecar association is checked against the BEAM module and safe
+immediate `ebin`/package layout. The function reads files but never loads
+target code or searches the code path. It returns `{ok, ModuleMap}` or a tagged
+error for BEAM/sidecar reads, invalid BEAM or Docs, invalid sidecar
+association, malformed classic LDoc, or missing documentation."
+
   (collect-artifact path 'none))
 
 (defun collect (path provenance)
-  "Collect Docs and optionally attach caller-declared EDoc conversion context."
+  "Collect documentation from PATH with optional caller-declared EDoc
+conversion context.
+
+PROVENANCE must be `{edoc, Source, Includes}` with a nonempty path and a proper list of valid
+include paths. This provenance value is validated before artifact
+collection, even when embedded Docs take precedence. Conversion context is
+recorded only if a sidecar is selected. The function does not run EDoc or
+authenticate the source claim. Carrier precedence and absence-only fallback
+match `collect/1`. Invalid provenance returns `invalid_edoc_provenance`; selected carrier,
+association, and file failures retain their specific tagged errors. No
+target module is loaded."
+
   (case provenance
     (`#(edoc ,source-path ,include-dirs)
      (if (andalso (valid-path? source-path)

@@ -1,6 +1,8 @@
 ;;;; Store immutable, readable snapshots for exact producer release keys.
 
 (defmodule ldoc-store
+  "Read and immutably publish exact-release native docsets as readable literal
+snapshots, retaining complete producer records."
   (export
    (get 2)
    (put 2)))
@@ -14,10 +16,17 @@
    (UNION 'ok (tuple 'error (term)))))
 
 (defun get (root release)
-  "Return the native docset stored for RELEASE under ROOT.
+  "Read the native snapshot for exact RELEASE beneath ROOT.
 
-  ROOT is a nonempty binary or flat character-list path. Lookup is exact and
-  never creates directories. Snapshot contents are parsed as one data form."
+ROOT is a nonempty binary or flat character-list path; lookup does not
+create directories. RELEASE must be the exact supported key. The complete
+snapshot is parsed as one literal form and checked for exact sorted unique
+module identities and supported terms without evaluation. Success returns
+`{ok, Docset}` and retains complete producer records. Missing data, invalid
+root/release/schema, malformed or nonregular snapshots, unsupported terms,
+and store IO failures return their specific tagged errors. Trusted atom
+reading is allowed; hostile-parent and symlink isolation are not promised."
+
   (case (valid-root? root)
     ('false '#(error invalid_store_root))
     ('true
@@ -26,11 +35,17 @@
        ('true (read-final root release))))))
 
 (defun put (root docset)
-  "Publish DOCSET immutably under its exact release key.
+  "Publish DOCSET immutably beneath ROOT using its exact release key.
 
-  Identical retries succeed without rewriting; different native data for an
-  existing key returns release_conflict. Publication uses a same-directory
-  temporary file and a hard link as the commit point."
+The docset and module identities are validated, then every producer term
+must fit the supported literal snapshot subset; unsupported data fails
+rather than being stripped. ROOT directories may be created. Success and
+identical retries return `ok`; different data for an existing key
+returns `{error, {release_conflict, Release}}`. Publication uses a same-directory temporary file and
+hard-link claim. Validation, encoding, conflict, and store IO failures are
+tagged. This does not promise universal power-loss atomicity or
+hostile-parent isolation."
+
   (case (valid-root? root)
     ('false '#(error invalid_store_root))
     ('true

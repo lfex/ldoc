@@ -1,6 +1,8 @@
 ;;;; Project exact release docsets into deterministic native analysis views.
 
 (defmodule ldoc-analysis
+  "Validate a stored native docset and project a deterministic presentation
+view, optionally deriving lexical relative source references."
   (export
    (view 1)
    (view 2)
@@ -20,25 +22,40 @@
   ([(term)] (boolean)))
 
 (defun valid-options? (options)
-  "Return whether OPTIONS would be accepted by view/2."
+  "Return whether OPTIONS is accepted by `view/2`.
+
+Only an empty map or a map containing `source_root` is valid. The root must be
+an absolute valid UTF-8 path without dot or dot-dot components. This
+predicate does not inspect files."
+
   (case (validate-options options)
     (`#(ok ,_) 'true)
     (_ 'false)))
 
 (defun view (docset)
-  "Return the public native analysis view of DOCSET.
+  "Project DOCSET into the default native analysis view without source
+references.
 
-  Selected documentation stays in native terms. Hidden module contents and
-  internal entries are omitted. view/2 can add relative source references.
-  Example: {ok, View} = 'ldoc-analysis':view(Docset)."
+Success returns `{ok, View}`; an invalid docset returns `{error, invalid_docset}`. The view
+groups languages, modules, and visible definitions deterministically,
+retains supported native kinds, excludes internal entries, and preserves
+documentation state. It performs no file IO or target loading."
+
   (view docset (maps:new)))
 
 (defun view (docset options)
-  "Return DOCSET projected through the selected native field allowlist.
+  "Project DOCSET through the selected native presentation fields.
 
-  OPTIONS is either an empty map or a map containing only source_root, an
-  absolute UTF-8 path with no dot or dot-dot components. Options are checked
-  before the complete docset structure. No files are inspected or loaded."
+OPTIONS is empty or contains only `source_root`, an absolute valid UTF-8 path
+without dot components. Options are checked before docset validation. Groups
+and identities are sorted; internal entries are excluded, hidden modules
+remain but suppress definitions and source, and hidden definition docs
+remain represented. Signatures and patterns are selected producer fields,
+not pretty-printed raw typed specs. A source reference is emitted only from
+explicit recorded provenance lexically beneath the declared root with a
+known positive line; no filesystem, symlink, existence, or authenticity
+check occurs. Returns `{ok, View}`, `{error, invalid_options}`, or `{error, invalid_docset}`."
+
   (case (validate-options options)
     (`#(ok ,root)
      (if (valid-docset? docset)

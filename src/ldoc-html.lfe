@@ -1,6 +1,8 @@
 ;;;; Pure deterministic static HTML rendering for selected analysis views.
 
 (defmodule ldoc-html
+  "Validate a selected analysis view and render a deterministic in-memory
+bundle of safe, local HTML reference files."
   (export
    (render 1)
    (render 2)
@@ -17,17 +19,46 @@
   ([(term)] (boolean)))
 
 (defun valid-options? (options)
-  "Return whether OPTIONS would be accepted by render/2."
+  "Return whether OPTIONS is accepted by `render/2`.
+
+Allowed keys are `locale`, `overview`, `source_base`, and `version_index`. Locale is a
+nonempty UTF-8 binary defaulting to `<<\"en\">>`; overview is a UTF-8 Markdown
+binary defaulting to `<<>>`; source_base is optional and binary;
+version_index defaults to `false` and must be boolean. This checks options
+only, not a view or rendered output."
+
   (case (validate-options options)
     (`#(ok ,_) 'true)
     (_ 'false)))
 
 (defun render (view)
-  "Render VIEW with default options into sorted relative filename/byte pairs."
+  "Render VIEW with default options into sorted relative filename and UTF-8
+byte pairs.
+
+Returns `{ok, Files}` or `{error, invalid_view}`. Rendering is in memory and does not write
+files, fetch remote resources, mutate a docset, or load target code."
+
   (render view #m()))
 
 (defun render (view options)
-  "Validate options and the complete selected view, then return a pure HTML bundle."
+  "Validate OPTIONS and the complete selected VIEW, then return a deterministic
+in-memory HTML bundle.
+
+OPTIONS permits only `locale` (a nonempty UTF-8 binary, default `<<\"en\">>`),
+`overview` (a UTF-8 Markdown binary, default `<<>>`), optional binary
+`source_base`, and boolean `version_index` (default `false`). A source base must be
+an absolute HTTP or HTTPS URI ending in `/`, with a host and without
+userinfo, query, or fragment. Locale selection is exact, then `und`,
+then lexical fallback. The selected view and every selected doc locale and
+identity must be renderable. Success returns `{ok, Files}` with sorted relative
+filename and UTF-8-byte pairs; invalid options return `{error, invalid_options}` and invalid
+views return `{error, invalid_view}`. A source link appears only when the selected view
+has a valid relative source record and `source_base` is supplied. Rendering
+does not write files, fetch network resources, mutate a docset, or load
+target code. Markdown/EDoc support is bounded; raw specs are not formatted,
+locale tags are conservative, and the shell is English/LTR without automatic
+paragraph bidi policy."
+
   (case (validate-options options)
     ('false '#(error invalid_options))
     (`#(ok ,opts)

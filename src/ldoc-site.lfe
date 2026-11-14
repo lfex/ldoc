@@ -3,6 +3,8 @@
 (include-lib "kernel/include/file.hrl")
 
 (defmodule ldoc-site
+  "Compose exact stored releases into a fresh deterministic local catalogue and
+versioned HTML reference tree."
   (export
    (build 3)
    (build 4)))
@@ -16,11 +18,32 @@
    (UNION (tuple 'ok (binary)) (tuple 'error (term)))))
 
 (defun build (store-root releases target)
-  "Build a fresh local site for RELEASES and return its absolute index path."
+  "Build a deterministic local site from exact stored RELEASES with default
+locale `<<\"en\">>` and return its absolute index path.
+
+TARGET must be a fresh absolute path whose parent already exists. All
+release data is prepared before the exclusive target claim; existing targets
+are not replaced. Success returns `{ok, IndexPathBinary}` or a tagged error. Catalogue
+sorting is bytewise, not semver policy, and metadata routes are opaque
+hashes. Only a newly claimed owned target is cleaned after write failure;
+cleanup failure preserves both errors. Publication is not an all-files or
+power-loss atomic transaction."
+
   (build store-root releases target #m()))
 
 (defun build (store-root releases target options)
-  "Prepare every exact release before claiming TARGET and writing the site."
+  "Build a fresh site from exact stored releases using the sole site option,
+`locale` (a nonempty UTF-8 binary, default `<<\"en\">>`).
+
+Each release spec has an exact `release` map and may declare `overview`,
+`source_root`, and `source_base`. Options, store root, absolute fresh target, and
+release list are validated; all store/view/render inputs are prepared before
+the exclusive target claim. Existing targets are never replaced. Success
+returns `{ok, IndexPathBinary}`. Read/render errors carry the exact release and stage;
+validation, claim, write, and cleanup failures are tagged. Only the newly
+claimed target is eligible for cleanup; cleanup failure retains both errors.
+The complete tree is not promised power-loss atomicity."
+
   (case (validate-request options store-root target releases)
     (`#(error ,reason) `#(error ,reason))
     (`#(ok ,locale ,root ,absolute-target ,specs)

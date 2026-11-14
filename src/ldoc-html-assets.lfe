@@ -1,6 +1,8 @@
 ;;;; Compiled, reviewable assets for the standalone HTML reference.
 
 (defmodule ldoc-html-assets
+  "Return the fixed stylesheet and progressive-enhancement script embedded in
+the standalone HTML reference."
   (export
    (css 0)
    (js 0)))
@@ -11,7 +13,12 @@
   (() (binary)))
 
 (defun css ()
-  "Return the fixed UTF-8 stylesheet bytes without filesystem access."
+  "Return the fixed compiled UTF-8 stylesheet bytes used by the standalone
+reference.
+
+The stylesheet is embedded in the module and returned as a binary; this
+function performs no filesystem IO and offers no customization interface."
+
   (iolist_to_binary
     (list
       #b("*{box-sizing:border-box}\n")
@@ -87,7 +94,12 @@
       #b("}\n"))))
 
 (defun js ()
-  "Return the fixed progressive-enhancement script bytes."
+  "Return the fixed compiled UTF-8 progressive-enhancement script bytes used by
+the standalone reference.
+
+The script is embedded in the module and returned as a binary; this function
+performs no filesystem IO and offers no customization interface."
+
   (iolist_to_binary
     (list
       #b("document.addEventListener('DOMContentLoaded', () => {\n")

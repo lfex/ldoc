@@ -1,6 +1,8 @@
 ;;;; Assemble complete module maps into an exact, in-memory release docset.
 
 (defmodule ldoc-docset
+  "Validate an exact release key and assemble a complete sorted in-memory
+docset from caller-selected trusted BEAM artifacts."
   (export
    (assemble 2)
    (valid-release? 1)))
@@ -14,21 +16,17 @@
           (tuple 'error (term)))))
 
 (defun assemble (release inputs)
-  "Assemble trusted local BEAM inputs into one complete release docset.
+  "Assemble RELEASE and INPUTS into one complete in-memory docset.
 
-  RELEASE must be the exact three-key release map. INPUTS is a nonempty
-  manifest of BEAM paths or {Path, Provenance} pairs. On success, the
-  collector's complete module maps are sorted by their normalized binary
-  names. For example:
+RELEASE must contain exactly nonempty valid UTF-8 binaries for `namespace`,
+`package`, and `version`. INPUTS is a nonempty proper list of trusted BEAM
+paths or `{Path, Provenance}` descriptors. Success returns `{ok, Docset}` with complete
+module maps sorted by normalized binary name. Invalid release returns
+`{error, invalid_release_key}`; empty or improper inputs return `{error, invalid_inputs}`; an invalid descriptor
+returns `{error, {invalid_input, Index}}`; collection failure returns `{error, {collect_failed, Path, Reason}}`; duplicate module
+identity returns `{error, {duplicate_module, Name, FirstPath, Path}}`. No partial docset is returned. Collection reads
+artifacts but does not load target code or write files."
 
-      'ldoc-docset':assemble(
-        #{namespace => <<\"local\">>, package => <<\"beam-fixtures\">>,
-          version => <<\"2.0-rc1\">>},
-        [\"_build/default/lib/app/ebin/module.beam\"]).
-
-  The function reads only through ldoc-beam:collect/1,2. It does not load
-  modules, change the code path, or write files. Invalid boundary inputs and
-  collector failures are returned as tagged errors."
   (case (valid-release? release)
     ('false '#(error invalid_release_key))
     ('true
@@ -39,10 +37,12 @@
          '#(error invalid_inputs)))))
 
 (defun valid-release? (release)
-  "Return true when RELEASE is exactly the supported three-field release key.
+  "Return whether RELEASE is exactly the supported three-key release map.
 
-  Each namespace, package, and version value must be a nonempty valid UTF-8
-  binary. Storage reuses this predicate so assembly and retrieval agree."
+Each namespace, package, and version value must be a nonempty valid UTF-8
+binary. The result is a boolean predicate used by assembly and storage; it
+does not authenticate a release against BEAM contents."
+
   (andalso (is_map release)
            (=:= (maps:size release) 3)
            (maps:is_key 'namespace release)

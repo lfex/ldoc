@@ -2,9 +2,10 @@
 -module(ldoc_cli).
 
 -moduledoc """
-Build a local reference site and native EEP-48 snapshot from a flat rebar3
-application. The command compiles the project as a child process and does not
-load or start the target application.
+Build a local reference site and readable native snapshot from a flat rebar3
+application. The tool VM inspects trusted BEAM data without loading target
+modules. The trusted child rebar3 compile may run project scripts, hooks, and
+compile-time code.
 """.
 
 -include_lib("kernel/include/file.hrl").
@@ -12,13 +13,15 @@ load or start the target application.
 -export([main/1, run/1]).
 
 -doc """
-Run the command-line entry point for `ldoc`.
+Run the command-line entry point for `ldoc` with escript arguments.
 
-`Args` contains the escript arguments. This command requires UTF-8 native
-filename encoding and configures its standard output and error streams for
-Unicode before parsing or building. It prints help or the published index path
-to standard output, writes diagnostics to standard error, and halts with
-status 0, 1, or 2. It is the only API function that halts the BEAM process.
+The entry point requires UTF-8 native filename encoding and configures only
+standard output and error for Unicode. It prints help or the absolute index
+path, sends diagnostics to standard error, and halts with status 0 for success
+or help, 2 for usage errors, and 1 for other failures. It is the only public
+function that halts the BEAM. The child rebar3 build is trusted and may execute
+project scripts, hooks, or compile-time code; target BEAM inspection itself
+does not load target modules.
 """.
 -spec main([string()]) -> no_return().
 main(Args) ->
@@ -76,15 +79,20 @@ main_result(Result) ->
 -doc """
 Run one command without halting the caller.
 
-Accepts escript arguments including `--help` or `build PROJECT --output ROOT`
-and the documented optional build settings. On success returns `{ok, help}`
-for help or `{ok, IndexBinary}` containing the absolute `site/index.html`
-path. On expected failures it returns `{error, Reason}`. A build starts ldoc's
-own required applications, compiles the target with a child `rebar3` process,
-may create a fresh output tree, and writes child progress to standard error;
-it never starts or loads the target application. It preserves caller IO,
-filename encoding, code path, environment, and group leader on return; EDoc's
-bracketed diagnostic redirection is restored on both success and failure.
+Accepts proper Unicode character-list arguments for `--help` or `build PROJECT
+--output FRESH_ROOT` and its optional settings. Success is `{ok, help}` or
+`{ok, IndexBinary}` containing the absolute `site/index.html` path; expected
+failures return `{error, Reason}`. A build starts ldoc's required applications,
+reconciles the flat default-profile source/app/BEAM inventory, and compiles
+with a trusted child rebar3 process. Child compilation may run project scripts,
+hooks, and compile-time code. The tool VM inspects BEAM data without loading
+target modules. A CLI failure after output ownership can retain a partial tree
+for diagnosis.
+
+Caller environment, code path, IO, and filename encoding are preserved. The
+caller group leader is restored after the existing bracketed EDoc diagnostic
+redirection. Shell argv, child-native decoding, filesystem paths, and printed
+text have distinct encoding boundaries.
 """.
 -spec run([string()]) -> {ok, help | binary()} | {error, term()}.
 run(["--help"]) -> {ok, help};

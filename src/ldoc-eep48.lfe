@@ -1,6 +1,9 @@
 ;;;; Validate and normalize EEP-48 documentation terms.
 
 (defmodule ldoc-eep48
+  "Normalize structurally supported EEP-48 Docs records into the native
+analysis map while retaining producer fields and caller-supplied source
+data."
   (export
    (decode 3)))
 
@@ -9,6 +12,16 @@
    (UNION (tuple 'ok (map)) (tuple 'error 'invalid_docs))))
 
 (defun decode (module source chunk-bytes)
+  "Normalize one `docs_v1` record for MODULE from CHUNK-BYTES, the complete
+ETF-encoded binary.
+
+MODULE must be an atom. SOURCE is copied through unchanged without shape or
+provenance validation. Structural fields, arbitrary atom kind/language
+values, annotations, signatures, documentation bodies, and producer metadata
+are retained. Success returns `{ok, ModuleMap}`; invalid ETF or unsupported Docs
+structure returns `{error, invalid_docs}`. Structural acceptance does not validate Unicode
+or HTML renderability, including structured EDoc bodies. No files are read
+and target code is not loaded."
   (case (ldoc-etf:decode chunk-bytes)
     (`#(ok ,term)
      (normalize module source term))
