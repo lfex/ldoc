@@ -18,6 +18,7 @@
              'ldoc-html-assets',
              'ldoc-legacy',
              'ldoc-markup',
+             'ldoc-pages',
              'ldoc-site',
              ldoc,
              ldoc_cli,

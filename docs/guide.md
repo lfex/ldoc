@@ -7,6 +7,7 @@ Contents
 - [Store exact release snapshots](#store-exact-release-snapshots)
 - [Build a native analysis view](#build-a-native-analysis-view)
 - [Render a local HTML reference](#render-a-local-html-reference)
+- [Render selected Markdown pages](#render-selected-markdown-pages)
 - [Build a versioned local site](#build-a-versioned-local-site)
 - [Generate an EEP-48 sidecar with EDoc](#generate-an-eep-48-sidecar-with-edoc)
 - [Collect classic LFE documentation](#collect-classic-lfe-documentation)
@@ -247,6 +248,33 @@ not promise to scrub or redact documentation text.
 Raw typed specs and annotations remain in storage and are not presented as
 inferred types by this API; signatures and classic patterns are the selected
 native view's documented presentation fields.
+
+## Render selected Markdown pages
+
+Portable callers can add an ordered set of project documentation pages to the
+in-memory HTML bundle. Each page has a project-relative `.md` path and UTF-8
+body; an optional title supplies its navigation label. The generated filename
+is derived from the canonical logical path, so titles never become filesystem
+paths. `overview_path` identifies the logical source of the `overview` body and
+is accepted only when the `pages` option is present. The explicit empty list
+also opts into documentation navigation.
+
+```erlang
+{ok, Files} = 'ldoc-html':render(View,
+    #{overview => <<"# Project guide\n\nStart with the setup page.">>,
+      pages => [#{path => <<"docs/setup.md">>,
+                  title => <<"Setup">>,
+                  body => <<"# Install\n\nFollow the project instructions.">>}]}).
+```
+
+The additional page is returned as another `{RelativeFilename, Bytes}` pair;
+the renderer still performs no file reads or writes. Page paths are UTF-8,
+NFC-normalised, project-relative POSIX `.md` identities. Absolute paths,
+backslashes, empty, `.` and `..` components, control characters, duplicate
+normalised identities, and a page that collides with `overview_path` are
+rejected as `{error, invalid_options}`. The site builder accepts the same
+`pages` and `overview_path` keys on an individual release specification and
+prepares them before claiming its fresh output directory.
 
 ## Build a versioned local site
 

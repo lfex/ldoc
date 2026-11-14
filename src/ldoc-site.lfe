@@ -177,7 +177,7 @@ The complete tree is not promised power-loss atomicity."
   (if (andalso (is_map spec)
                (maps:is_key 'release spec)
                (all-keys? (maps:keys spec)
-                          '(release overview source_root source_base)))
+                          '(release overview source_root source_base pages overview_path)))
       (let ((release (maps:get 'release spec)))
         (if (andalso (ldoc-docset:valid-release? release)
                      (release-lengths-valid? release)
@@ -197,9 +197,17 @@ The complete tree is not promised power-loss atomicity."
            (=< (byte_size binary) 4294967295)))
 
 (defun valid-spec-options (spec)
-  (andalso (valid-optional-render-option spec 'overview)
-           (andalso (valid-optional-render-option spec 'source_base)
-                    (valid-optional-analysis-option spec 'source_root))))
+  (andalso (valid-spec-render-options spec)
+           (valid-optional-analysis-option spec 'source_root)))
+
+(defun valid-spec-render-options (spec)
+  (ldoc-html:valid-options? (selected-render-options spec)))
+
+(defun selected-render-options (spec)
+  (lists:foldl (lambda (key options)
+    (case (maps:find key spec)
+      (`#(ok ,value) (maps:put key value options))
+      (_ options))) #m() '(overview source_base pages overview_path)))
 
 (defun valid-optional-render-option (spec key)
   (case (maps:find key spec)
@@ -220,9 +228,10 @@ The complete tree is not promised power-loss atomicity."
          (with-root (case (maps:find 'source_root spec)
                       (`#(ok ,value) (maps:put 'source_root value base))
                       (_ base))))
-    (case (maps:find 'source_base spec)
-      (`#(ok ,value) (maps:put 'source_base value with-root))
-      (_ with-root))))
+    (lists:foldl (lambda (key options)
+      (case (maps:find key spec)
+        (`#(ok ,value) (maps:put key value options))
+        (_ options))) with-root '(source_base pages overview_path))))
 
 (defun release-spec-before? (left right)
   (< (release-key (maps:get 'release left))
@@ -312,9 +321,10 @@ The complete tree is not promised power-loss atomicity."
          (with-overview (case (maps:find 'overview spec)
                           (`#(ok ,value) (maps:put 'overview value base))
                           (_ base))))
-    (case (maps:find 'source_base spec)
-      (`#(ok ,value) (maps:put 'source_base value with-overview))
-      (_ with-overview))))
+    (lists:foldl (lambda (key options)
+      (case (maps:find key spec)
+        (`#(ok ,value) (maps:put key value options))
+        (_ options))) with-overview '(source_base pages overview_path))))
 
 (defun prefix-files (route files)
   (case files

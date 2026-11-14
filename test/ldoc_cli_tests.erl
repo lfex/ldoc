@@ -546,6 +546,7 @@ assert_cli_public_docs() ->
                                   'ldoc-eep48', 'ldoc-etf', 'ldoc-html',
                                   'ldoc-html-assets', 'ldoc-legacy',
                                   'ldoc-markup', 'ldoc-site', 'ldoc-store',
+                                  'ldoc-pages',
                                   ldoc, ldoc_cli, ldoc_prv]),
     ?assertEqual(ExpectedModules, lists:sort(AppModules)),
     ExpectedFunctions = lists:sort([
@@ -560,6 +561,8 @@ assert_cli_public_docs() ->
         {'ldoc-html', 'valid-options?', 1},
         {'ldoc-html-assets', css, 0}, {'ldoc-html-assets', js, 0},
         {'ldoc-markup', escape, 1}, {'ldoc-markup', render, 2},
+        {'ldoc-pages', 'canonical-path', 1}, {'ldoc-pages', prepare, 2},
+        {'ldoc-pages', route, 1},
         {'ldoc-site', build, 3}, {'ldoc-site', build, 4},
         {ldoc, init, 1},
         {ldoc_cli, main, 1}, {ldoc_cli, run, 1}, {ldoc_cli, run, 2},
@@ -610,7 +613,7 @@ assert_cli_public_docs() ->
                      not lists:member(Identity, ExpectedGenerated)]
     end || Module <- ExpectedModules]),
     ?assertEqual(ExpectedFunctions, lists:sort(ActualFunctions)),
-    ?assertEqual(50, length(ExpectedGenerated)).
+    ?assertEqual(54, length(ExpectedGenerated)).
 
 nonempty_english_doc(Doc) when is_map(Doc) ->
     case maps:get(<<"en">>, Doc, <<>>) of
