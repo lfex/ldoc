@@ -216,11 +216,20 @@ validate_generation(Container, Generation) ->
     GenPath = filename:join(Container, Generation),
     Marker = filename:join(GenPath, ".ldoc-generation"),
     Ref = filename:join(GenPath, "reference"),
-    case {file:read_link_info(GenPath), file:read_link_info(Marker),
+    case {file:read_link_info(GenPath), generation_contents(GenPath),
+          file:read_link_info(Marker),
           file:read_file(Marker), file:read_link_info(Ref)} of
-        {{ok, #file_info{type = directory}}, {ok, #file_info{type = regular}},
-         {ok, ?GENERATION}, {ok, #file_info{type = directory}}} -> {ok, {present, Generation}};
+        {{ok, #file_info{type = directory}}, ok,
+         {ok, #file_info{type = regular}}, {ok, ?GENERATION},
+         {ok, #file_info{type = directory}}} -> {ok, {present, Generation}};
         _ -> {error, {invalid_current_generation, Generation}}
+    end.
+
+generation_contents(Path) ->
+    case file:list_dir(Path) of
+        {ok, [".ldoc-generation", "reference"]} -> ok;
+        {ok, ["reference", ".ldoc-generation"]} -> ok;
+        _ -> error
     end.
 
 build_generation(Container, Root, Options, Rebar3, Previous) ->
