@@ -39,6 +39,8 @@ real_provider_generation() ->
         ?assertNotEqual(nomatch, binary:match(FirstOutput, <<"current/site/index.html">>)),
         FirstTree = tree(FirstRef),
         ?assert(site_contains(FirstRef, <<"Initial provider documentation">>)),
+        nonregular_generation_marker_is_refused(Rebar, Root, Container,
+                                                Current, FirstTarget, FirstRef, FirstTree),
         create_consumer(Root, "Updated provider documentation with additional words."),
         {ok, _} = command(Rebar, ["ldoc"], Root),
         {ok, SecondTarget} = file:read_link(Current),
@@ -72,7 +74,8 @@ real_provider_generation() ->
         stale_lock_is_preserved(Rebar, Root, Container, Current, GenerationBeforeFailure),
         invalid_current_is_preserved(Rebar, Root, Workspace, Current),
         unowned_container_is_preserved(Rebar, Root),
-        symlink_container_is_preserved(Rebar, Root)
+        symlink_container_is_preserved(Rebar, Root),
+        symlink_build_ancestor_is_refused(Rebar, Root, Workspace)
     after
         remove_tree(Workspace)
     end.
@@ -109,6 +112,24 @@ unowned_container_is_preserved(Rebar, Root) ->
     ?assertMatch({error, _}, command(Rebar, ["ldoc"], OtherRoot)),
     ?assertEqual({ok, <<"user data">>}, file:read_file(Sentinel)).
 
+nonregular_generation_marker_is_refused(Rebar, Root, Container, Current,
+                                         Target, Reference, ReferenceTree) ->
+    Mkfifo = os:find_executable("mkfifo"),
+    ?assert(Mkfifo =/= false),
+    Marker = filename:join([Container, filename:dirname(Target), ".ldoc-generation"]),
+    ok = file:delete(Marker),
+    {ok, _} = command(Mkfifo, [Marker], Root),
+    Started = erlang:monotonic_time(millisecond),
+    Result = command(Rebar, ["ldoc"], Root),
+    Elapsed = erlang:monotonic_time(millisecond) - Started,
+    ?assertMatch({error, _}, Result),
+    ?assert(Elapsed < 10000),
+    ?assertEqual({ok, Target}, file:read_link(Current)),
+    ?assertEqual(ReferenceTree, tree(Reference)),
+    ok = file:delete(Marker),
+    ok = file:write_file(Marker, <<"ldoc-rebar3-generation-v1\n">>, [binary, exclusive]),
+    ok.
+
 invalid_current_is_preserved(Rebar, Root, Workspace, Current) ->
     Outside = filename:join(Workspace, "outside-target"),
     ok = file:write_file(Outside, <<"outside bytes">>),
@@ -134,6 +155,16 @@ symlink_container_is_preserved(Rebar, Root) ->
     ok = file:make_symlink(External, Container),
     ?assertMatch({error, _}, command(Rebar, ["ldoc"], OtherRoot)),
     ?assertEqual({ok, <<"external bytes">>}, file:read_file(Sentinel)).
+
+symlink_build_ancestor_is_refused(Rebar, Root, Workspace) ->
+    Build = filename:join(Root, "_build"),
+    External = filename:join(Workspace, "external-build"),
+    ok = file:rename(Build, External),
+    Sentinel = filename:join([External, "default", "keep"]),
+    ok = file:write_file(Sentinel, <<"build sibling">>),
+    ok = file:make_symlink(External, Build),
+    ?assertMatch({error, _}, command(Rebar, ["ldoc"], Root)),
+    ?assertEqual({ok, <<"build sibling">>}, file:read_file(Sentinel)).
 
 make_plugin_source(Git, SourceRoot, PluginSource) ->
     ok = file:make_dir(PluginSource),
@@ -178,6 +209,9 @@ collect(Port, Acc) ->
         {Port, {exit_status, 0}} -> {ok, iolist_to_binary(lists:reverse(Acc))};
         {Port, {exit_status, Status}} ->
             {error, {Status, iolist_to_binary(lists:reverse(Acc))}}
+    after 15000 ->
+        _ = catch port_close(Port),
+        {error, timeout}
     end.
 
 tree(Root) ->
@@ -222,5 +256,6 @@ remove_tree(Path) ->
             file:del_dir(Path);
         {ok, #file_info{type = symlink}} -> file:delete(Path);
         {ok, #file_info{type = regular}} -> file:delete(Path);
+        {ok, _} -> file:delete(Path);
         {error, enoent} -> ok
     end.

@@ -195,8 +195,12 @@ with_lock(Container, Fun) ->
     end.
 
 release_lock(Lock, Token) ->
-    case {file:read_link_info(Lock), file:read_file(Lock)} of
-        {{ok, #file_info{type = regular}}, {ok, Token}} -> file:delete(Lock);
+    case file:read_link_info(Lock) of
+        {ok, #file_info{type = regular}} ->
+            case file:read_file(Lock) of
+                {ok, Token} -> file:delete(Lock);
+                _ -> ok
+            end;
         _ -> ok
     end.
 
@@ -229,11 +233,13 @@ validate_generation(Container, Generation) ->
     Marker = filename:join(GenPath, ".ldoc-generation"),
     Ref = filename:join(GenPath, "reference"),
     case {file:read_link_info(GenPath), generation_contents(GenPath),
-          file:read_link_info(Marker),
-          file:read_file(Marker), file:read_link_info(Ref)} of
+          file:read_link_info(Marker), file:read_link_info(Ref)} of
         {{ok, #file_info{type = directory}}, ok,
-         {ok, #file_info{type = regular}}, {ok, ?GENERATION},
-         {ok, #file_info{type = directory}}} -> {ok, {present, Generation}};
+         {ok, #file_info{type = regular}}, {ok, #file_info{type = directory}}} ->
+            case file:read_file(Marker) of
+                {ok, ?GENERATION} -> {ok, {present, Generation}};
+                _ -> {error, {invalid_current_generation, Generation}}
+            end;
         _ -> {error, {invalid_current_generation, Generation}}
     end.
 
