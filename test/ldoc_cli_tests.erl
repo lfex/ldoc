@@ -1,6 +1,7 @@
 -module(ldoc_cli_tests).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
 
 ldoc_cli_test_() ->
     {timeout, 240, fun() ->
@@ -11,6 +12,9 @@ ldoc_cli_test_() ->
             two_carrier_cli_build(Workspace),
             package_label_containment(Workspace),
             ordered_header_choices(Workspace),
+            unicode_run_identity(Workspace),
+            include_lib_dependency(Workspace),
+            child_flag_preservation(Workspace),
             compiled_inventory_rejections(Workspace),
             malformed_edoc_retains_partial_root(Workspace),
             ?assertEqual({ok, <<"unrelated">>}, file:read_file(SiblingSentinel))
@@ -208,6 +212,282 @@ ordered_header_case(Workspace, FirstName, SecondName, ExpectedFunction) ->
     ?assertNot(lists:any(fun(Entry) -> maps:get(name, Entry) =:=
                                           unicode:characters_to_binary(OtherFunction) end, Entries)).
 
+unicode_run_identity(Workspace) ->
+    Root = filename:join(Workspace, "unicode-identity-project"),
+    Output = filename:join(Workspace, "unicode-identity-output"),
+    Namespace = "λ namespace",
+    Package = "Ω package",
+    create_project(Root),
+    Before = #{native => file:native_name_encoding(),
+               stdout => io:getopts(standard_io),
+               stderr => io:getopts(standard_error),
+               code_path => code:get_path(),
+               group_leader => group_leader(),
+               erlang_flags => os:getenv("ERL_FLAGS"),
+               erlang_aflags => os:getenv("ERL_AFLAGS"),
+               erlang_zflags => os:getenv("ERL_ZFLAGS"),
+               erlang_libs => os:getenv("ERL_LIBS")},
+    {ok, Index} = ldoc_cli:run(["build", Root, "--output", Output,
+                                "--namespace", Namespace, "--package", Package]),
+    ExpectedIndex = unicode:characters_to_binary(
+                      filename:join([Output, "site", "index.html"])),
+    ?assertEqual(ExpectedIndex, Index),
+    Release = #{namespace => unicode:characters_to_binary(Namespace),
+                package => unicode:characters_to_binary(Package),
+                version => <<"1.2.3">>},
+    {ok, Docset} = 'ldoc-store':get(filename:join(Output, "snapshots"), Release),
+    ?assertEqual(Release, maps:get(release, Docset)),
+    SiteFiles = read_tree(filename:join(Output, "site")),
+    ?assert(lists:any(fun({_Name, Bytes}) ->
+                          binary:match(Bytes, unicode:characters_to_binary("λ namespace/Ω package")) =/= nomatch
+                      end, SiteFiles)),
+    ?assertEqual(false, code:is_loaded(cli_native)),
+    ?assertEqual(false, code:is_loaded(cli_edoc)),
+    After = #{native => file:native_name_encoding(),
+              stdout => io:getopts(standard_io),
+              stderr => io:getopts(standard_error),
+              code_path => code:get_path(),
+              group_leader => group_leader(),
+              erlang_flags => os:getenv("ERL_FLAGS"),
+              erlang_aflags => os:getenv("ERL_AFLAGS"),
+              erlang_zflags => os:getenv("ERL_ZFLAGS"),
+              erlang_libs => os:getenv("ERL_LIBS")},
+    ?assertEqual(Before, After),
+    case file:native_name_encoding() of
+        utf8 ->
+            UnicodeRoot = filename:join(Workspace, "project λ"),
+            UnicodeOutput = filename:join(Workspace, "output Ω"),
+            create_project(UnicodeRoot),
+            {ok, UnicodeIndex} = ldoc_cli:run(["build", UnicodeRoot,
+                                               "--output", UnicodeOutput]),
+            ?assertEqual(unicode:characters_to_binary(
+                           filename:join([UnicodeOutput, "site", "index.html"])),
+                         UnicodeIndex),
+            ?assert(filelib:is_regular(UnicodeIndex));
+        _ -> ok
+    end.
+
+include_lib_dependency(Workspace) ->
+    Root = filename:join(Workspace, "include-lib-project"),
+    Dependency = filename:join(Workspace, "header-dependency"),
+    Output1 = filename:join(Workspace, "include-lib-dependency-output"),
+    Output2 = filename:join(Workspace, "include-lib-decoy-output"),
+    Leader = group_leader(),
+    CodePath = code:get_path(),
+    DependencyPath = create_header_dependency(Dependency),
+    create_header_target(Root, DependencyPath, false),
+    Sentinel = filename:join([Root, "doc", "chunks", "author.keep"]),
+    ok = filelib:ensure_dir(Sentinel),
+    ok = file:write_file(Sentinel, <<"author-owned">>),
+    {ok, _} = ldoc_cli:run(["build", Root, "--output", Output1]),
+    assert_header_choice(Output1, Root, dependency_choice, decoy_choice,
+                         atom, "Header-selected API documentation."),
+    ?assertEqual(false, code:is_loaded(header_edoc)),
+    ?assertEqual(false, code:is_loaded(header_dep)),
+    ?assertEqual({error, bad_name}, code:lib_dir(header_dep)),
+    Decoy = filename:join(Root, "decoy"),
+    DecoyHeader = filename:join([Decoy, "header_dep", "include", "choice.hrl"]),
+    ok = filelib:ensure_dir(DecoyHeader),
+    ok = file:write_file(DecoyHeader,
+                         <<"-define(SELECTED_NAME, decoy_choice).\n"
+                           "-define(SELECTED_TYPE, binary()).\n"
+                           "-define(SELECTED_VALUE, <<\"decoy\">>).\n">>),
+    create_header_target(Root, DependencyPath, true),
+    {ok, _} = ldoc_cli:run(["build", Root, "--output", Output2]),
+    assert_header_choice(Output2, Root, decoy_choice, dependency_choice,
+                         binary, "Header-selected API documentation."),
+    ?assert(lists:member(Decoy, maps:get(include_paths,
+                       maps:get(conversion,
+                         maps:get(source, element(2, find_module(
+                           Output2, <<"header-package">>, <<"header_edoc">>))))))),
+    ?assertEqual(CodePath, code:get_path()),
+    ?assertEqual(Leader, group_leader()),
+    ?assertEqual({ok, <<"author-owned">>}, file:read_file(Sentinel)),
+    ?assertNot(filelib:is_regular(filename:join(Root, "doc/chunks/header_edoc.chunk"))).
+
+create_header_dependency(Dependency) ->
+    Src = filename:join(Dependency, "src"),
+    Include = filename:join(Dependency, "include"),
+    ok = filelib:ensure_dir(filename:join(Src, "placeholder")),
+    ok = filelib:ensure_dir(filename:join(Include, "placeholder")),
+    ok = file:write_file(filename:join(Dependency, "rebar.config"),
+                         <<"{erl_opts, [debug_info]}.\n">>),
+    ok = file:write_file(filename:join(Src, "header_dep.app.src"),
+                         <<"{application, header_dep, [{description, \"Header dependency\"}, {vsn, \"1\"}, {applications, [kernel, stdlib]}, {modules, [header_dep]}]}.\n">>),
+    ok = file:write_file(filename:join(Src, "header_dep.erl"),
+                         <<"-module(header_dep).\n-export([loaded/0]).\nloaded() -> true.\n">>),
+    ok = file:write_file(filename:join(Include, "choice.hrl"),
+                         <<"-define(SELECTED_NAME, dependency_choice).\n"
+                           "-define(SELECTED_TYPE, atom()).\n"
+                           "-define(SELECTED_VALUE, dependency_value).\n">>),
+    Pwd = os:find_executable("pwd"),
+    {ok, CanonicalBytes} = fixture_command(Pwd, ["-P"], Dependency),
+    CanonicalDependency = string:trim(unicode:characters_to_list(CanonicalBytes)),
+    Git = os:find_executable("git"),
+    {ok, _} = fixture_command(Git, ["init", "-b", "main"], CanonicalDependency),
+    {ok, _} = fixture_command(Git, ["config", "user.name", "Fixture Committer"], CanonicalDependency),
+    {ok, _} = fixture_command(Git, ["config", "user.email", "committer@example.test"], CanonicalDependency),
+    {ok, _} = fixture_command(Git, ["add", "rebar.config", "src", "include"], CanonicalDependency),
+    MessagePath = filename:join(CanonicalDependency, "fixture-commit-message.txt"),
+    Message = <<"Add local header dependency\n\n"
+                "Co-authored-by: Codex <noreply@openai.com>\n"
+                "Co-authored-by: Billo AI <ai-engineering@billo.systems>\n">>,
+    ok = file:write_file(MessagePath, Message, [binary, exclusive]),
+    {ok, _} = fixture_command(Git, ["-c", "user.name=Fixture Committer",
+                                    "-c", "user.email=committer@example.test",
+                                    "-c", "commit.gpgsign=false",
+                                    "-c", "core.hooksPath=/dev/null",
+                                    "commit", "--author=Fixture Author <author@example.test>",
+                                    "--cleanup=verbatim", "-F", MessagePath], CanonicalDependency),
+    {ok, Author} = fixture_command(Git, ["log", "-1", "--format=%an <%ae>"], CanonicalDependency),
+    ?assertEqual(<<"Fixture Author <author@example.test>\n">>, Author),
+    {ok, CommitMessage} = fixture_command(Git, ["show", "-s", "--format=%B"], CanonicalDependency),
+    ?assertNotEqual(nomatch, binary:match(CommitMessage,
+       <<"Co-authored-by: Codex <noreply@openai.com>\n"
+         "Co-authored-by: Billo AI <ai-engineering@billo.systems>">>)),
+    CanonicalDependency.
+
+create_header_target(Root, Dependency, WithDecoy) ->
+    Src = filename:join(Root, "src"),
+    ok = filelib:ensure_dir(filename:join(Src, "placeholder")),
+    Config = case WithDecoy of
+        false -> io_lib:format("{deps, [{header_dep, {git, \"file://~s\", {branch, \"main\"}}}]} .~n{erl_opts, [debug_info]} .~n",
+                               [Dependency]);
+        true -> io_lib:format("{deps, [{header_dep, {git, \"file://~s\", {branch, \"main\"}}}]} .~n{erl_opts, [debug_info, {i, \"decoy\"}]} .~n",
+                              [Dependency])
+    end,
+    ok = file:write_file(filename:join(Root, "rebar.config"), Config),
+    ok = file:write_file(filename:join(Src, "header_fixture.app.src"),
+                         <<"{application, header_fixture, [{description, \"Header fixture\"}, {vsn, \"1\"}, {pkg_name, \"header-package\"}, {applications, [kernel, stdlib]}, {modules, [header_edoc]}]}.\n">>),
+    ok = file:write_file(filename:join(Src, "header_edoc.erl"),
+                         <<"-module(header_edoc).\n"
+                           "-include_lib(\"header_dep/include/choice.hrl\").\n"
+                           "-export([?SELECTED_NAME/0]).\n"
+                           "%% @doc Header-selected API documentation.\n"
+                           "-spec ?SELECTED_NAME() -> ?SELECTED_TYPE.\n"
+                           "?SELECTED_NAME() -> ?SELECTED_VALUE.\n">>).
+
+assert_header_choice(Output, Root, Expected, Rejected, ExpectedType, Prose) ->
+    AppDir = filename:join([Root, "_build", "default", "lib", "header_fixture", "ebin"]),
+    BeamPath = filename:join(AppDir, "header_edoc.beam"),
+    {ok, {header_edoc, [{exports, Exports}, {abstract_code, {raw_abstract_v1, Forms}}]}} =
+        beam_lib:chunks(BeamPath, [exports, abstract_code]),
+    ?assert(lists:member({Expected, 0}, Exports)),
+    ?assertNot(lists:member({Rejected, 0}, Exports)),
+    ReturnType = fixture_spec_return(Forms, Expected),
+    ?assertMatch({type, _, ExpectedType, []}, ReturnType),
+    BodyValue = fixture_function_return(Forms, Expected),
+    case Expected of
+        dependency_choice -> ?assertMatch({atom, _, dependency_value}, BodyValue);
+        decoy_choice ->
+            ?assertMatch({bin, _, [{bin_element, _, {string, _, "decoy"}, default, default}]},
+                         BodyValue)
+    end,
+    ?assertEqual(false, code:is_loaded(header_edoc)),
+    {ok, Module} = find_module(Output, <<"header-package">>, <<"header_edoc">>),
+    Entries = maps:get(entries, Module),
+    [SelectedEntry] = [Entry || Entry <- Entries,
+                                maps:get(name, Entry) =:= atom_to_binary(Expected, utf8)],
+    ?assertNot(lists:any(fun(Entry) -> maps:get(name, Entry) =:= atom_to_binary(Rejected, utf8) end,
+                         Entries)),
+    ExpectedSignature = case Expected of
+        dependency_choice -> <<"dependency_choice()">>;
+        decoy_choice -> <<"decoy_choice()">>
+    end,
+    ?assertEqual([ExpectedSignature], maps:get(signatures, SelectedEntry)),
+    #{signature := [{attribute, _, spec, {{Expected, 0},
+        [{type, _, 'fun', [{type, _, product, []}, DocsReturnType]}]}}]} =
+        maps:get(metadata, SelectedEntry),
+    ?assertMatch({type, _, ExpectedType, []}, DocsReturnType),
+    ?assertEqual(#{<<"en">> => [{p, [], [unicode:characters_to_binary(Prose)]}]},
+                 maps:get(doc, SelectedEntry)),
+    Source = maps:get(source, Module),
+    ?assertEqual(eep48_sidecar, maps:get(carrier, Source)),
+    Conversion = maps:get(conversion, Source),
+    ?assertEqual(filename:join([Root, "src", "header_edoc.erl"]),
+                 maps:get(source_path, Conversion)),
+    IncludePaths = maps:get(include_paths, Conversion),
+    BuildLibs = filename:join([Root, "_build", "default", "lib"]),
+    ?assert(lists:member(BuildLibs, IncludePaths)),
+    ?assertEqual(BuildLibs, lists:last(IncludePaths)),
+    ok.
+
+fixture_spec_return(Forms, Name) ->
+    [SpecForms] = [Types ||
+                      {attribute, _, spec, {{SpecName, 0}, Types}} <- Forms,
+                      SpecName =:= Name],
+    [{type, _, 'fun', [{type, _, product, []}, ReturnType]}] = SpecForms,
+    ReturnType.
+
+fixture_function_return(Forms, Name) ->
+    [Clause] = [Clause || {function, _, FunctionName, 0, [Clause]} <- Forms,
+                          FunctionName =:= Name],
+    {clause, _, [], [], [Return]} = Clause,
+    Return.
+
+fixture_command(Executable, Args, Cwd) ->
+    true = filename:pathtype(Cwd) =:= absolute,
+    Port = open_port({spawn_executable, Executable},
+                     [binary, exit_status, use_stdio, stderr_to_stdout,
+                      {args, Args}, {cd, Cwd}, {line, 4096}]),
+    collect_fixture_command(Port, []).
+
+collect_fixture_command(Port, Acc) ->
+    receive
+        {Port, {data, {eol, Data}}} -> collect_fixture_command(Port, [<<Data/binary, "\n">> | Acc]);
+        {Port, {data, {noeol, Data}}} -> collect_fixture_command(Port, [Data | Acc]);
+        {Port, {exit_status, 0}} -> {ok, iolist_to_binary(lists:reverse(Acc))};
+        {Port, {exit_status, Status}} ->
+            {error, {exit_status, Status, iolist_to_binary(lists:reverse(Acc))}}
+    after 30000 ->
+        port_close(Port),
+        {error, timeout}
+    end.
+
+child_flag_preservation(Workspace) ->
+    Root = filename:join(Workspace, "child-flag-project"),
+    Output = filename:join(Workspace, "child-flag-output"),
+    Marker = filename:join(Root, "child-flags.term"),
+    create_project(Root),
+    Script = "Flags = #{encoding => file:native_name_encoding(), "
+             "schedulers => erlang:system_info(schedulers_online), "
+             "async_threads => erlang:system_info(thread_pool_size), "
+             "dirty_cpu => erlang:system_info(dirty_cpu_schedulers_online), "
+             "aflags => os:getenv(\"ERL_AFLAGS\"), "
+             "flags => os:getenv(\"ERL_FLAGS\"), "
+             "zflags => os:getenv(\"ERL_ZFLAGS\")}, "
+             "ok = file:write_file(\"child-flags.term\", term_to_binary(Flags)), CONFIG.\n",
+    ok = file:write_file(filename:join(Root, "rebar.config.script"), Script),
+    Keys = ["ERL_AFLAGS", "ERL_FLAGS", "ERL_ZFLAGS"],
+    Before = [{Key, os:getenv(Key)} || Key <- Keys],
+    try
+        true = os:putenv("ERL_AFLAGS", "+S 2:2"),
+        true = os:putenv("ERL_FLAGS", "+A 7"),
+        true = os:putenv("ERL_ZFLAGS", "+SDcpu 1"),
+        ParentValues = [{Key, os:getenv(Key)} || Key <- Keys],
+        {ok, _} = ldoc_cli:run(["build", Root, "--output", Output]),
+        {ok, Bytes} = file:read_file(Marker),
+        Child = binary_to_term(Bytes),
+        ?assertEqual(utf8, maps:get(encoding, Child)),
+        ?assertEqual(2, maps:get(schedulers, Child)),
+        ?assertEqual(7, maps:get(async_threads, Child)),
+        ?assertEqual(1, maps:get(dirty_cpu, Child)),
+        ?assertEqual("+fnu +S 2:2", maps:get(aflags, Child)),
+        ?assertEqual("+A 7", maps:get(flags, Child)),
+        ?assertEqual("+SDcpu 1", maps:get(zflags, Child)),
+        ?assertEqual(ParentValues, [{Key, os:getenv(Key)} || Key <- Keys])
+    after
+        restore_environment(Before)
+    end.
+
+restore_environment([]) -> ok;
+restore_environment([{Key, false} | Rest]) ->
+    true = os:unsetenv(Key),
+    restore_environment(Rest);
+restore_environment([{Key, Value} | Rest]) ->
+    true = os:putenv(Key, Value),
+    restore_environment(Rest).
+
 compiled_inventory_rejections(Workspace) ->
     inventory_rejection(Workspace, "missing",
       "rm _build/default/lib/cli_fixture/ebin/cli_edoc.beam", inventory),
@@ -380,7 +660,9 @@ normalize_source(Source, Output) ->
     end, Source, [path, beam_path]).
 
 with_workspace(Fun) ->
-    OwnedRoot = claim_workspace(32),
+    OwnedRoot = filename:absname(claim_workspace(32)),
+    ok = file:change_mode(OwnedRoot, 8#700),
+    ok = assert_private_root(OwnedRoot),
     Workspace = filename:join(OwnedRoot, "working"),
     Sentinel = filename:join(OwnedRoot, "sibling-sentinel"),
     ok = file:make_dir(Workspace),
@@ -391,6 +673,18 @@ with_workspace(Fun) ->
         {ok, <<"unrelated">>} = file:read_file(Sentinel),
         ok = file:del_dir_r(OwnedRoot)
     end.
+
+assert_private_root(Root) ->
+    true = filename:pathtype(Root) =:= absolute,
+    true = filename:absname(Root) =:= Root,
+    {ok, Info} = file:read_file_info(Root),
+    directory = Info#file_info.type,
+    0 = Info#file_info.mode band 8#077,
+    {ok, Cwd} = file:get_cwd(),
+    true = filename:pathtype(Cwd) =:= absolute,
+    true = filename:absname(Cwd) =:= Cwd,
+    true = filelib:is_dir(Cwd),
+    ok.
 
 claim_workspace(Attempts) when Attempts > 0 ->
     Name = "ldoc-cli-tests-" ++ os:getpid() ++ "-" ++

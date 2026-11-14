@@ -14,14 +14,43 @@ load or start the target application.
 -doc """
 Run the command-line entry point for `ldoc`.
 
-`Args` contains the escript arguments. This function prints help or the
-published index path to standard output, writes diagnostics to standard error,
-and halts with status 0, 1, or 2. It is the only API function that halts the
-BEAM process.
+`Args` contains the escript arguments. This command requires UTF-8 native
+filename encoding and configures its standard output and error streams for
+Unicode before parsing or building. It prints help or the published index path
+to standard output, writes diagnostics to standard error, and halts with
+status 0, 1, or 2. It is the only API function that halts the BEAM process.
 """.
 -spec main([string()]) -> no_return().
 main(Args) ->
-    case run(Args) of
+    case file:native_name_encoding() of
+        utf8 ->
+            case set_command_io_encoding() of
+                ok -> main_result(run(Args));
+                {error, Reason} ->
+                    io:put_chars(standard_error,
+                                 ["ldoc: ", format_reason({runtime, {io_encoding, Reason}}), "\n"]),
+                    halt(1)
+            end;
+        Encoding ->
+            io:put_chars(standard_error,
+                         ["ldoc: ",
+                          format_reason({runtime, {unsupported_native_encoding, Encoding}}),
+                          "\n"]),
+            halt(1)
+    end.
+
+set_command_io_encoding() ->
+    case io:setopts(standard_io, [{encoding, unicode}]) of
+        ok ->
+            case io:setopts(standard_error, [{encoding, unicode}]) of
+                ok -> ok;
+                {error, Reason} -> {error, {standard_error, Reason}}
+            end;
+        {error, Reason} -> {error, {standard_io, Reason}}
+    end.
+
+main_result(Result) ->
+    case Result of
         {ok, help} ->
             io:put_chars("ldoc build PROJECT --output FRESH_ROOT [OPTIONS]\n"
                          "ldoc --help | help\n"
@@ -53,7 +82,9 @@ for help or `{ok, IndexBinary}` containing the absolute `site/index.html`
 path. On expected failures it returns `{error, Reason}`. A build starts ldoc's
 own required applications, compiles the target with a child `rebar3` process,
 may create a fresh output tree, and writes child progress to standard error;
-it never starts or loads the target application.
+it never starts or loads the target application. It preserves caller IO,
+filename encoding, code path, environment, and group leader on return; EDoc's
+bracketed diagnostic redirection is restored on both success and failure.
 """.
 -spec run([string()]) -> {ok, help | binary()} | {error, term()}.
 run(["--help"]) -> {ok, help};
@@ -235,10 +266,19 @@ compile_project(Project) ->
         Rebar3 ->
             Port = open_port({spawn_executable, Rebar3},
                              [binary, exit_status, use_stdio, stderr_to_stdout,
-                              {args, ["compile"]}, {cd, Project}, {line, 4096}]),
+                              {args, ["compile"]}, {cd, Project},
+                              {env, [{"ERL_AFLAGS", child_erlang_aflags()}]},
+                              {line, 4096}]),
             try wait_compile(Port, Project)
             after close_compile_port(Port)
             end
+    end.
+
+child_erlang_aflags() ->
+    case os:getenv("ERL_AFLAGS") of
+        false -> "+fnu";
+        [] -> "+fnu";
+        Original -> "+fnu " ++ Original
     end.
 
 close_compile_port(Port) ->
@@ -443,8 +483,11 @@ edoc_context(Bytes, Project) ->
                 false ->
                     Includes0 = [filename:absname(Path, Project) || {i, Path} <- Options],
                     ProjectInclude = filename:join(Project, "include"),
-                    Includes = append_existing(ProjectInclude,
-                                                [P || P <- Includes0, filelib:is_dir(P)]),
+                    Includes1 = append_existing(ProjectInclude,
+                                                 [P || P <- Includes0, filelib:is_dir(P)]),
+                    BuildLibs = filename:absname(
+                                  filename:join([Project, "_build", "default", "lib"])),
+                    Includes = append_existing(BuildLibs, Includes1),
                     Macros = [edoc_macro(Option) || Option <- Options,
                                                     is_edoc_macro(Option)],
                     {ok, Includes, Macros}

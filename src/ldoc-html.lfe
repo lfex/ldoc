@@ -14,7 +14,7 @@
                           (tuple 'error (UNION 'invalid_options 'invalid_view)))))
 
 (defspec (valid-options? 1)
-  ([(term)] 'boolean))
+  ([(term)] (boolean)))
 
 (defun valid-options? (options)
   "Return whether OPTIONS would be accepted by render/2."

@@ -1974,7 +1974,29 @@ analysis_app_contract() ->
                                      Name =/= 'LFE-EXPAND-EXPORTED-MACRO',
                                      Name =/= module_info]),
     ?assertEqual([{build, 3}, {build, 4}], SitePublicExports),
+    assert_native_boolean_spec('ldoc-docset', 'valid-release?', 1),
+    assert_native_boolean_spec('ldoc-analysis', 'valid-options?', 1),
+    assert_native_boolean_spec('ldoc-html', 'valid-options?', 1),
+    ?assert('ldoc-docset':'valid-release?'(
+              #{namespace => <<"local">>, package => <<"pkg">>, version => <<"1">>})),
+    ?assertNot('ldoc-docset':'valid-release?'(
+                 #{namespace => <<"local">>, package => <<"pkg">>})),
+    ?assert('ldoc-analysis':'valid-options?'(#{})),
+    ?assertNot('ldoc-analysis':'valid-options?'(#{source_root => "relative"})),
+    ?assert('ldoc-html':'valid-options?'(#{})),
+    ?assertNot('ldoc-html':'valid-options?'(#{version_index => invalid})),
     ok.
+
+assert_native_boolean_spec(Module, Name, Arity) ->
+    Beam = code:which(Module),
+    {ok, {Module, [{abstract_code, {raw_abstract_v1, Forms}}]}} =
+        beam_lib:chunks(Beam, [abstract_code]),
+    [SpecForms] = [Types ||
+                      {attribute, _, spec, {{SpecName, SpecArity}, Types}} <- Forms,
+                      SpecName =:= Name, SpecArity =:= Arity],
+    [{type, _, 'fun', [{type, _, product, _Args}, ReturnType]}] = SpecForms,
+    ?assertMatch({type, _, boolean, []}, ReturnType),
+    ?assertNotMatch({atom, _, boolean}, ReturnType).
 
 site_s01_s06(Temp, StoreRoot, Retrieved1, Retrieved2, View1, View2) ->
     Release1 = maps:get(release, Retrieved1),

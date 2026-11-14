@@ -6,7 +6,7 @@
    (valid-release? 1)))
 
 (defspec (valid-release? 1)
-  ([(term)] 'boolean))
+  ([(term)] (boolean)))
 
 (defspec (assemble 2)
   ([(map) (list)]
