@@ -1,10 +1,12 @@
 # ldoc
 
-ldoc collects API documentation for Erlang, modern LFE, and classic LFE from
-trusted local BEAM artifacts. `collect/1` prefers embedded EEP-48 Docs, then
-an associated package sidecar, then classic LFE LDoc from the same BEAM. It
-falls back only when a carrier is absent. `read-docs/1` reads embedded Docs
-only. Neither reader loads the target module or searches the code path.
+This source builds ldoc 0.1.0, which collects API documentation for Erlang,
+modern LFE, and classic LFE from trusted local BEAM artifacts. It assembles
+native snapshots and renders a static HTML reference. `collect/1` prefers
+embedded EEP-48 Docs, then an associated package sidecar, then classic LFE
+LDoc from the same BEAM. It falls back only when a carrier is absent.
+`read-docs/1` reads embedded Docs only. Neither reader loads the target module
+or searches the code path.
 
 ## Install from a published release
 
@@ -35,10 +37,10 @@ set `ldoc_tag` in the calling shell to an actual published tag shown on the
 )
 ```
 
-This pre-release source has no published ldoc release yet, so the public
-clone-and-install recipe becomes executable after the first release is
-published. The release page is the source for choosing a real tag; do not
-substitute a development branch or commit.
+Use this route only with a tag for an actual published ldoc release. If no
+release is published yet, or you are working from a checkout, use the source
+checkout route below. The Releases page is the source for choosing a real tag;
+do not substitute a development branch or commit.
 
 The recipe resolves a relative `PREFIX` to an absolute path before `make -C`
 changes directories, then removes only its unique temporary clone/build root.
@@ -70,6 +72,37 @@ install recipe.
 make install PREFIX="$HOME/.local"
 "$HOME/.local/bin/ldoc" --help
 ```
+
+### Maintainer package and docs checks
+
+From a source checkout, the maintained reference and combined Hex provider
+flow are:
+
+```sh
+make check
+make docs
+make publish PUBLISH_FLAGS="--dry-run --yes"
+```
+
+`make docs` builds a fresh versioned reference under
+`_build/ldoc/docs.XXXXXXXX/reference/site` and leaves it available for browsing.
+Set `DOCS_PARENT` to choose another persistent parent, or `DOCGEN` to select a
+built ldoc executable. The release version comes from the compiled app resource.
+`make publish` builds a separate fresh reference under a unique `publish.*`
+staging directory and calls the combined source-and-docs Hex publish provider
+once. Its EXIT trap removes only that staging directory; persistent `make docs`
+outputs remain. `--dry-run --yes` builds both provider payloads without
+uploading either package. A real publish requires the maintainer's normal
+Hex authorization.
+
+To inspect the official source package separately, run
+`rebar3 hex build package --output /absolute/path/ldoc-0.1.0.tar`; the
+`--output` value names the tarball file, and its parent directory must exist.
+The package contains the application source, tests, README, overview, LICENSE,
+Makefile, and Rebar configuration/lock. The companion docs package is generated
+from the same versioned site used by the combined provider. These source/docs
+artifacts describe the release; ldoc does not provide a prebuilt executable
+through this workflow.
 
 ### Build a local reference
 

@@ -1,9 +1,9 @@
-# ldoc overview
+# ldoc 0.1.0 overview
 
-`ldoc` builds a local, static reference for a trusted flat Erlang or LFE
-application. It collects native documentation from compiled BEAM files, stores
-a readable snapshot, selects a presentation view, and renders a local HTML
-bundle. The output is useful offline and does not require a hosted service.
+This source builds ldoc 0.1.0, a source-based tool that collects native
+documentation from trusted Erlang and LFE BEAM files, stores a readable
+snapshot, selects a presentation view, and renders a local static HTML
+reference. The output is useful offline and does not require a hosted service.
 
 ## Build a project reference
 
@@ -33,6 +33,29 @@ spaces and Unicode with UTF-8 native filename encoding. A project root used for
 a cold dependency build is subject to LFE 2.2.2's `app_compile` hook, which
 constructs a command with an unquoted path; use a space-free source/cache/build
 root for that cold build.
+
+## Prepare maintainer docs and packages
+
+From the checkout, `make docs` builds a fresh reference using the compiled
+application version and retains it under
+`_build/ldoc/docs.XXXXXXXX/reference/site`. `DOCS_PARENT` can select another
+persistent parent, and `DOCGEN` can select a built ldoc executable.
+
+```sh
+make check
+make docs
+make publish PUBLISH_FLAGS="--dry-run --yes"
+```
+
+`make publish` builds a new reference in unique temporary staging and invokes
+the official combined source-and-docs Hex provider once. The staging tree is
+removed on exit while `make docs` output stays available. The dry-run builds
+both payloads without uploading either package. A real publish needs the maintainer's normal
+Hex authorization. The official source package can be written for inspection
+with `rebar3 hex build package --output /absolute/path/ldoc-0.1.0.tar`;
+`--output` names the tarball file and its parent directory must exist. The
+package metadata and file list identify the source release, while the generated
+site supplies its docs package. No prebuilt executable is produced by these commands.
 
 ## Use the library pipeline
 
