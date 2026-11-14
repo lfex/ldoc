@@ -33,7 +33,12 @@ help_and_usage(Workspace) ->
                                filename:join(Workspace, "first"), "--output",
                                filename:join(Workspace, "second")])),
     ?assertMatch({error, {usage, {unknown_or_missing_option, "--unknown"}}},
-                 ldoc_cli:run(["build", ".", "--unknown", "x"])) .
+                 ldoc_cli:run(["build", ".", "--unknown", "x"])),
+    ?assertEqual({ok, help}, ldoc_cli:run(["--help"], #{})),
+    ?assertMatch({error, {runtime, {invalid_rebar3_executable, _}}},
+                 ldoc_cli:run(["--help"], #{rebar3 => "relative/rebar3"})),
+    ?assertMatch({error, {runtime, {unknown_options, _}}},
+                 ldoc_cli:run(["--help"], #{unexpected => true})).
 
 prebuild_rejections(Workspace) ->
     Missing = filename:join(Workspace, "missing-project"),
@@ -533,7 +538,7 @@ assert_cli_public_docs() ->
                                   'ldoc-eep48', 'ldoc-etf', 'ldoc-html',
                                   'ldoc-html-assets', 'ldoc-legacy',
                                   'ldoc-markup', 'ldoc-site', 'ldoc-store',
-                                  ldoc_cli]),
+                                  ldoc, ldoc_cli, ldoc_prv]),
     ?assertEqual(ExpectedModules, lists:sort(AppModules)),
     ExpectedFunctions = lists:sort([
         {'ldoc-beam', 'read-docs', 1}, {'ldoc-beam', collect, 1},
@@ -548,11 +553,17 @@ assert_cli_public_docs() ->
         {'ldoc-html-assets', css, 0}, {'ldoc-html-assets', js, 0},
         {'ldoc-markup', escape, 1}, {'ldoc-markup', render, 2},
         {'ldoc-site', build, 3}, {'ldoc-site', build, 4},
-        {ldoc_cli, main, 1}, {ldoc_cli, run, 1}]),
+        {ldoc, init, 1},
+        {ldoc_cli, main, 1}, {ldoc_cli, run, 1}, {ldoc_cli, run, 2},
+        {ldoc_prv, init, 1}, {ldoc_prv, do, 1},
+        {ldoc_prv, format_error, 1}]),
     ExpectedGenerated = lists:sort(lists:append([
         case Module of
             ldoc_cli -> [{ldoc_cli, module_info, 0},
                          {ldoc_cli, module_info, 1}];
+            ldoc -> [{ldoc, module_info, 0}, {ldoc, module_info, 1}];
+            ldoc_prv -> [{ldoc_prv, module_info, 0},
+                         {ldoc_prv, module_info, 1}];
             _ -> [{Module, module_info, 0}, {Module, module_info, 1},
                   {Module, '__info__', 1},
                   {Module, 'LFE-EXPAND-EXPORTED-MACRO', 3}]
@@ -591,7 +602,7 @@ assert_cli_public_docs() ->
                      not lists:member(Identity, ExpectedGenerated)]
     end || Module <- ExpectedModules]),
     ?assertEqual(ExpectedFunctions, lists:sort(ActualFunctions)),
-    ?assertEqual(46, length(ExpectedGenerated)).
+    ?assertEqual(50, length(ExpectedGenerated)).
 
 nonempty_english_doc(Doc) when is_map(Doc) ->
     case maps:get(<<"en">>, Doc, <<>>) of

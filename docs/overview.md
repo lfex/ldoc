@@ -1,28 +1,36 @@
-# ldoc 0.1.0 overview
+# ldoc 0.1.1 overview
 
-This source builds ldoc 0.1.0, a source-based tool that collects native
+This source builds ldoc 0.1.1, a source-based tool that collects native
 documentation from trusted Erlang and LFE BEAM files, stores a readable
 snapshot, selects a presentation view, and renders a local static HTML
 reference. The output is useful offline and does not require a hosted service.
 
 ## Build a project reference
 
-Use a fresh output root whose parent already exists. The exact version shown in
-the reference is read from the compiled application resource; the output folder
-name is only your label.
+Configure ldoc as a development-only project plugin, then run `rebar3 ldoc` in
+an ordinary flat Erlang or LFE project:
 
 ```sh
-ldoc build "$PWD" --output "$PWD/reference-1.2.0" \
-  --overview "$PWD/docs/overview.md" \
-  --source-root "$PWD" \
-  --source-base "https://example.test/my-app/"
+{project_plugins, [{ldoc, "0.1.1"}]}.
 ```
 
-Open `reference-1.2.0/site/index.html`. The source root and source base are
-explicit declarations. A source link is emitted only when selected documentation
-contains a real source record beneath that root; ldoc does not infer or verify
-a repository host, revision, or checkout. Choose another new output directory
-for each build because existing targets are never replaced.
+The stable index is `_build/default/ldoc/current/site/index.html`. Successful
+generations are retained and `current` switches only after a successful build.
+The plugin output is separate from maintainer docs under `_build/ldoc/docs.*`.
+After Rebar is killed, inspect `.ldoc-lock` and confirm no build remains active
+before removing a stale lock. The filesystem must support relative symlinks.
+Only the default profile is supported. LFE projects still configure the LFE
+runtime dependency and compiler plugin in their normal `deps` and `plugins`.
+
+For a separate destination, choose a fresh output root:
+
+```sh
+rebar3 ldoc --output "$PWD/reference"
+```
+
+The exact version shown in a generated reference comes from the compiled
+application resource. Source links are opt-in with `--source-root` and
+`--source-base`; ldoc does not infer a repository host, revision, or checkout.
 
 The command supports a flat default-profile application with one root
 `src/*.app.src` and direct nonempty `src/*.erl` and `src/*.lfe` files. It checks
@@ -53,7 +61,7 @@ removed on exit while `make docs` output stays available. The dry-run builds
 both payloads without uploading either package. A real publish needs the maintainer's normal
 Hex authorization. The official source package can be written for inspection
 with `rebar3 hex build package`. Its default output is
-`_build/default/lib/ldoc/hex/ldoc-0.1.0.tar` after the application is built.
+`_build/default/lib/ldoc/hex/ldoc-0.1.1.tar` after the application is built.
 The package metadata and file list identify the source release, while the
 generated site supplies its docs package. No prebuilt executable is produced by these commands.
 

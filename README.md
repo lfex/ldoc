@@ -1,6 +1,6 @@
 # ldoc
 
-This source builds ldoc 0.1.0, which collects API documentation for Erlang,
+This source builds ldoc 0.1.1, which collects API documentation for Erlang,
 modern LFE, and classic LFE from trusted local BEAM artifacts. It assembles
 native snapshots and renders a static HTML reference. `collect/1` prefers
 embedded EEP-48 Docs, then an associated package sidecar, then classic LFE
@@ -8,61 +8,42 @@ LDoc from the same BEAM. It falls back only when a carrier is absent.
 `read-docs/1` reads embedded Docs only. Neither reader loads the target module
 or searches the code path.
 
-## Install from a published release
+## Build a project reference with Rebar3
 
-The normal user route clones the latest published GitHub release and installs
-the standalone command under an absolute prefix. It needs Git, Make, Erlang/OTP
-with its compiler and `crypto` application, and Rebar3. Rebar3 3.28.0 is the
-version verified here; this source is tested with OTP 27, 28, and 29. For Erlang
-source-comment conversion, the OTP EDoc application must provide
-`edoc_doclet_chunks` and `edoc_layout_chunks`; ldoc reports an error when those
-chunk tools are unavailable. Automatic latest-release selection also needs
-`gh` authenticated to GitHub. To skip `gh`,
-set `ldoc_tag` in the calling shell to an actual published tag shown on the
-[ldoc Releases page](https://github.com/lfex/ldoc/releases).
+Add ldoc as a development-only project plugin, then run it from an ordinary
+flat Erlang or LFE project:
 
-```bash
-(
-  set -eu
-  ldoc_prefix="${PREFIX:-$HOME/.local}"
-  case "$ldoc_prefix" in
-    /*) ;;
-    *) ldoc_prefix="$PWD/$ldoc_prefix" ;;
-  esac
-  ldoc_work="$(mktemp -d /tmp/ldoc-install.XXXXXXXX)"
-  trap 'rm -rf -- "$ldoc_work"' EXIT
-  ldoc_tag="${ldoc_tag:-$(gh release view --repo lfex/ldoc --json tagName --jq '.tagName')}"
-  git clone --depth 1 --branch "$ldoc_tag" https://github.com/lfex/ldoc.git "$ldoc_work/source"
-  make -C "$ldoc_work/source" install PREFIX="$ldoc_prefix"
-)
+```erlang
+{project_plugins, [{ldoc, "0.1.1"}]}.
 ```
-
-Use this route only with a tag for an actual published ldoc release. If no
-release is published yet, or you are working from a checkout, use the source
-checkout route below. The Releases page is the source for choosing a real tag;
-do not substitute a development branch or commit.
-
-The recipe resolves a relative `PREFIX` to an absolute path before `make -C`
-changes directories, then removes only its unique temporary clone/build root.
-The installed command remains outside that root. After installation succeeds,
-set `PATH` and check the command using the matching prefix. For the default
-`$HOME/.local` prefix:
 
 ```sh
-export PATH="$HOME/.local/bin:$PATH"
-ldoc --help
+rebar3 ldoc
 ```
 
-For a custom prefix, replace the example with the normalized absolute prefix
-used for installation; do not use a relative PATH entry that may point
-somewhere else after a later directory change:
+The provider builds the default profile and refreshes
+`_build/default/ldoc/current/site/index.html`. Source projects keep their
+normal compiler configuration. LFE projects still declare the LFE runtime
+dependency and compiler plugin in `deps` and `plugins`; ldoc itself is not a
+runtime dependency. Rebar3 3.28.0 is the verified provider version. Erlang
+source-comment conversion requires OTP's `edoc_doclet_chunks` and
+`edoc_layout_chunks` tools.
+
+Each successful run retains its private generation and atomically changes
+`current`. This container is separate from maintainer output under
+`_build/ldoc/docs.*`. If Rebar is killed, inspect `.ldoc-lock` and confirm no
+build remains active before removing a stale lock. The filesystem must support
+relative symlinks. Non-default profiles are rejected because child default
+compilation does not inherit a parent's compiled profile inventory.
+
+Pass `--output PATH` to select a different destination; it must be fresh and is
+never replaced or deleted:
 
 ```sh
-export PATH="/absolute/prefix/bin:$PATH"
-ldoc --help
+rebar3 ldoc --output /absolute/path/to/reference
 ```
 
-### Install from a source checkout
+### Install the standalone command from a source checkout
 
 For development, install the current checkout directly. `make check` is a
 separate optional compile-and-test gate, not a prerequisite hidden in the
@@ -97,7 +78,7 @@ Hex authorization.
 
 To inspect the official source package separately, run
 `rebar3 hex build package`. The default output is
-`_build/default/lib/ldoc/hex/ldoc-0.1.0.tar` after the application is built.
+`_build/default/lib/ldoc/hex/ldoc-0.1.1.tar` after the application is built.
 The package contains the application source, tests, README, overview, LICENSE,
 Makefile, and Rebar configuration/lock. The companion docs package is generated
 from the same versioned site used by the combined provider. These source/docs

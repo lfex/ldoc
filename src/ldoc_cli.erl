@@ -10,7 +10,7 @@ compile-time code.
 
 -include_lib("kernel/include/file.hrl").
 
--export([main/1, run/1]).
+-export([main/1, run/1, run/2]).
 
 -doc """
 Run the command-line entry point for `ldoc` with escript arguments.
@@ -95,14 +95,39 @@ redirection. Shell argv, child-native decoding, filesystem paths, and printed
 text have distinct encoding boundaries.
 """.
 -spec run([string()]) -> {ok, help | binary()} | {error, term()}.
-run(["--help"]) -> {ok, help};
-run(["help"]) -> {ok, help};
-run(["build" | Args]) ->
+run(Args) -> run(Args, #{}).
+
+-doc "Run one command with narrowly scoped runtime options. The `rebar3` option injects the absolute executable used for child compilation; absent that key, lookup uses the caller PATH as in `run/1`. No caller environment or VM state is changed.".
+-spec run([string()], map()) -> {ok, help | binary()} | {error, term()}.
+run(Args, RuntimeOptions) when is_list(Args), is_map(RuntimeOptions) ->
+    case validate_runtime_options(RuntimeOptions) of
+        ok -> run_command(Args, RuntimeOptions);
+        {error, Reason} -> {error, Reason}
+    end.
+
+run_command(["--help"], _RuntimeOptions) -> {ok, help};
+run_command(["help"], _RuntimeOptions) -> {ok, help};
+run_command(["build" | Args], RuntimeOptions) ->
     case parse_build_args(Args) of
-        {ok, Opts} -> build(Opts);
+        {ok, Opts} -> build(Opts, RuntimeOptions);
         {error, Reason} -> {error, {usage, Reason}}
     end;
-run(_) -> {error, {usage, expected_build}}.
+run_command(_, _RuntimeOptions) -> {error, {usage, expected_build}}.
+
+validate_runtime_options(RuntimeOptions) ->
+    case maps:keys(RuntimeOptions) -- [rebar3] of
+        [] -> validate_runtime_executable(maps:find(rebar3, RuntimeOptions));
+        Unknown -> {error, {runtime, {unknown_options, Unknown}}}
+    end.
+
+validate_runtime_executable(error) -> ok;
+validate_runtime_executable({ok, Path}) when is_list(Path), Path =/= [] ->
+    case filename:pathtype(Path) =:= absolute andalso filelib:is_regular(Path) of
+        true -> ok;
+        false -> {error, {runtime, {invalid_rebar3_executable, Path}}}
+    end;
+validate_runtime_executable({ok, Path}) ->
+    {error, {runtime, {invalid_rebar3_executable, Path}}}.
 
 parse_build_args([Project | Args]) when Project =/= "", Project =/= "--output" ->
     case lists:prefix("--", Project) of
@@ -141,16 +166,16 @@ option_key("--package") -> package;
 option_key("--source-root") -> source_root;
 option_key("--source-base") -> source_base.
 
-build(Opts) ->
+build(Opts, RuntimeOptions) ->
     Cwd = filename:absname("."),
     RawProject = maps:get(project, Opts),
     RawOutput = maps:get(output, Opts),
     case has_parent_traversal(RawProject) orelse has_parent_traversal(RawOutput) of
         true -> {error, {usage, parent_traversal}};
-        false -> build_paths(Opts, Cwd)
+        false -> build_paths(Opts, Cwd, RuntimeOptions)
     end.
 
-build_paths(Opts, Cwd) ->
+build_paths(Opts, Cwd, RuntimeOptions) ->
     case application:ensure_all_started(ldoc) of
         {ok, _Started} ->
             Project = filename:absname(maps:get(project, Opts), Cwd),
@@ -158,7 +183,7 @@ build_paths(Opts, Cwd) ->
             case validate_prebuild(Project, Output, Opts) of
                 {error, Reason} -> {error, Reason};
                 {ok, Sources, AppSrc, Overview, ReleaseSeed, SiteOptions} ->
-                    case compile_project(Project) of
+                    case compile_project(Project, RuntimeOptions) of
                         {error, Reason} -> {error, Reason};
                         ok -> build_compiled(Project, Output, Sources, AppSrc,
                                              Overview, ReleaseSeed, SiteOptions)
@@ -268,8 +293,12 @@ read_app_source(Path) ->
         {error, Reason} -> {error, {project, Path, {read_application_resource, Reason}}}
     end.
 
-compile_project(Project) ->
-    case os:find_executable("rebar3") of
+compile_project(Project, RuntimeOptions) ->
+    Executable = case maps:find(rebar3, RuntimeOptions) of
+        {ok, Path} -> Path;
+        error -> os:find_executable("rebar3")
+    end,
+    case Executable of
         false -> {error, {compile, Project, rebar3_not_found}};
         Rebar3 ->
             Port = open_port({spawn_executable, Rebar3},
