@@ -13,7 +13,9 @@ bundle of safe, local HTML reference files."
                    (tuple 'error 'invalid_view))))
 (defspec (render 2)
   ([(term) (term)] (UNION (tuple 'ok (list (tuple (binary) (binary))))
-                          (tuple 'error (UNION 'invalid_options 'invalid_view)))))
+                          (tuple 'error
+                            (UNION 'invalid_options 'invalid_view
+                              (tuple 'documentation_link (map)))))))
 
 (defspec (valid-options? 1)
   ([(term)] (boolean)))
@@ -21,7 +23,8 @@ bundle of safe, local HTML reference files."
 (defun valid-options? (options)
   "Return whether OPTIONS is accepted by `render/2`.
 
-Allowed keys are `locale`, `overview`, `source_base`, and `version_index`. Locale is a
+Allowed keys are `locale`, `overview`, `source_base`, `version_index`, `pages`,
+and `overview_path`. Locale is a
 nonempty UTF-8 binary defaulting to `<<\"en\">>`; overview is a UTF-8 Markdown
 binary defaulting to `<<>>`; source_base is optional and binary;
 version_index defaults to `false` and must be boolean. This checks options
@@ -44,15 +47,19 @@ files, fetch remote resources, mutate a docset, or load target code."
   "Validate OPTIONS and the complete selected VIEW, then return a deterministic
 in-memory HTML bundle.
 
-OPTIONS permits only `locale` (a nonempty UTF-8 binary, default `<<\"en\">>`),
+OPTIONS permits `locale` (a nonempty UTF-8 binary, default `<<\"en\">>`),
 `overview` (a UTF-8 Markdown binary, default `<<>>`), optional binary
-`source_base`, and boolean `version_index` (default `false`). A source base must be
+`source_base`, boolean `version_index` (default `false`), optional ordered
+`pages` maps with required UTF-8 `path` and `body` binaries and optional
+nonblank UTF-8 `title`, and optional `overview_path`. `overview_path` is a
+logical Markdown identity and requires the explicit `pages` key. A source base must be
 an absolute HTTP or HTTPS URI ending in `/`, with a host and without
 userinfo, query, or fragment. Locale selection is exact, then `und`,
 then lexical fallback. The selected view and every selected doc locale and
 identity must be renderable. Success returns `{ok, Files}` with sorted relative
-filename and UTF-8-byte pairs; invalid options return `{error, invalid_options}` and invalid
-views return `{error, invalid_view}`. A source link appears only when the selected view
+filename and UTF-8-byte pairs; invalid options return `{error, invalid_options}`,
+invalid views return `{error, invalid_view}`, and unresolved local Markdown links
+return `{error, {documentation_link, Details}}`. A source link appears only when the selected view
 has a valid relative source record and `source_base` is supplied. Rendering
 does not write files, fetch network resources, mutate a docset, or load
 target code. Markdown/EDoc support is bounded; raw specs are not formatted,
@@ -65,7 +72,63 @@ paragraph bidi policy."
      (case (validate-view view)
        ('false '#(error invalid_view))
        (`#(ok ,canonical)
-        `#(ok ,(bundle canonical opts)))))))
+        (case (prepare-document-contexts canonical opts)
+          (`#(error ,reason) `#(error ,reason))
+          (`#(ok ,contexts)
+           `#(ok ,(bundle canonical (maps:put 'document_contexts contexts opts))))))))))
+
+(defun prepare-document-contexts (view options)
+  (case (maps:get 'pages options)
+    ('absent `#(ok #m()))
+    (pages
+     (let* ((overview `#m(path ,(canonical-overview-path (maps:get 'overview_path options)) route #b("index.html")
+                           body ,(maps:get 'overview options)))
+            (page-documents (lists:map
+               (lambda (page) `#m(path ,(maps:get 'path page)
+                                  route ,(ldoc-pages:route (maps:get 'path page))
+                                  body ,(maps:get 'body page))) pages))
+            (documents (lists:append (list (list overview) page-documents
+                                           (module-markdown-documents view options)))))
+       (ldoc-pages:prepare-graph documents)))))
+
+(defun module-markdown-documents (view options)
+  (lists:filtermap
+    (lambda (item)
+      (let* ((language (element 1 item))
+             (module (element 2 item))
+             (blocks (module-markdown-blocks module options)))
+        (case blocks
+          (() 'false)
+          (_ `#(true #m(path ,(module-filename language (maps:get 'name module))
+                            route ,(module-filename language (maps:get 'name module))
+                            body ,(join-markdown-blocks blocks) blocks ,blocks))))))
+    (flatten-modules (maps:get 'languages view))))
+(defun module-markdown-blocks (module options)
+  (let ((format (maps:get 'format module)) (locale (maps:get 'locale options)))
+    (let* ((module-body (selected-markdown-body format (maps:get 'doc module) locale))
+           (definition-bodies (lists:map
+             (lambda (definition)
+               (selected-markdown-body format (maps:get 'doc definition) locale))
+             (maps:get 'definitions module)))
+           (all (case module-body
+                  (body (when (is_binary body)) (cons body definition-bodies))
+                  (_ definition-bodies))))
+      (lists:filter (lambda (body) (is_binary body)) all))))
+(defun selected-markdown-body (format doc locale)
+  (if (=:= format #b("text/markdown"))
+      (case doc
+        (doc-map (when (is_map doc-map))
+         (case (select-locale doc-map locale)
+           (`#(,_language ,body) (when (is_binary body)) body)
+           (_ 'none)))
+        (_ 'none))
+      'none))
+(defun join-markdown-blocks (blocks)
+  (case blocks
+    (() #b())
+    ((cons body ()) body)
+    ((cons body rest)
+     (iolist_to_binary (list body #b("\n\n") (join-markdown-blocks rest))))))
 
 (defun validate-options (options)
   (if (andalso (is_map options)
@@ -95,7 +158,7 @@ paragraph bidi policy."
       source_base ,(maps:get 'source_base options 'none)
       version_index ,(maps:get 'version_index options 'false)
       pages ,(maps:get 'pages options 'absent)
-      overview_path ,(maps:get 'overview_path options #b("README.md")))))
+      overview_path ,(canonical-overview-path (maps:get 'overview_path options #b("README.md"))))))
     (case (maps:find 'pages options)
       (`#(ok ,pages)
        (case (ldoc-pages:prepare pages (maps:get 'overview_path options #b("README.md")))
@@ -106,6 +169,10 @@ paragraph bidi policy."
     (() 'true)
     ((cons key rest) (andalso (lists:member key allowed) (all-keys? rest allowed)))
     (_ 'false)))
+(defun canonical-overview-path (path)
+  (case (ldoc-pages:canonical-path path)
+    (`#(ok ,canonical) canonical)
+    (_ path)))
 (defun valid-locale? (locale)
   (andalso (is_binary locale) (> (byte_size locale) 0) (valid-utf8? locale)))
 (defun valid-overview? (overview)
@@ -422,15 +489,16 @@ paragraph bidi policy."
           (navigation-panel (maps:get 'languages view) 'none
                             (maps:get 'pages options) 'none)
           #b("<main id=\"main\" class=\"content\" tabindex=\"-1\"><article class=\"overview-content\">")
-          (overview-content (maps:get 'overview options) modules)
+          (overview-content (maps:get 'overview options) modules options)
           #b("</article></main></div>")
           (page-end))))
-(defun overview-content (overview modules)
+(defun overview-content (overview modules options)
   (if (=:= overview #b())
       (list #b("<h1>API overview</h1><p>Browse the modules for this release.</p>")
             #b("<h2>Modules</h2>") (overview-module-links modules))
       (list (if (overview-has-heading? overview) #b() #b("<h1>API overview</h1>"))
-            (render-markdown overview)
+            (render-document-markdown overview options
+                                      (maps:get 'overview_path options))
             #b("<h2>Modules</h2>")
             (overview-module-links modules))))
 (defun overview-has-heading? (overview)
@@ -459,7 +527,8 @@ paragraph bidi policy."
 (defun render-module-file (view options item languages modules)
   (let* ((module (element 2 item))
          (language (element 1 item))
-         (filename (module-filename language (maps:get 'name module))))
+         (filename (module-filename language (maps:get 'name module)))
+         (module-options (maps:put 'document_route filename options)))
     (tuple filename
       (html-binary
         (list (page-start (maps:get 'release view) options)
@@ -470,9 +539,12 @@ paragraph bidi policy."
               (ldoc-markup:escape (maps:get 'name module))
               #b("</h1>")
               (render-doc (maps:get 'format module) (maps:get 'doc module)
-                          options)
-              (source-link module options)
-              (render-definitions module options)
+                          (maps:put 'document_heading_count
+                            (markdown-heading-count (maps:get 'format module)
+                              (maps:get 'doc module) (maps:get 'locale options))
+                            (maps:put 'document_heading_offset 0 module-options)))
+              (source-link module module-options)
+              (render-definitions module module-options)
               #b("</article></main></div>")
               (page-end))))))
 (defun html-binary (parts) (iolist_to_binary parts))
@@ -513,7 +585,8 @@ paragraph bidi policy."
         #b("<div class=\"nav-columns\"><div class=\"primary-nav\">")
         (filter-control)
         #b("<p class=\"nav-title\">Browse</p><ul class=\"nav-list\"><li data-filter-item><a href=\"index.html\"")
-        (if (=:= current-item 'none) #b(" aria-current=\"page\"") #b())
+        (if (andalso (=:= current-item 'none) (=:= current-page 'none))
+            #b(" aria-current=\"page\"") #b())
         #b(">Overview</a></li></ul>")
         (docs-navigation pages current-page)
         (navigation-languages languages current-item)
@@ -553,13 +626,14 @@ paragraph bidi policy."
                                 (maps:get 'pages options) path)
               #b("<main id=\"main\" class=\"content\" tabindex=\"-1\"><article class=\"overview-content\">")
               (if (markdown-has-h1? body) #b() (list #b("<h1>") (ldoc-markup:escape title) #b("</h1>")))
-              (render-markdown body)
+              (render-document-markdown body options path)
               #b("</article></main></div>")
               (page-end))))))
 (defun page-title (page)
   (case (maps:find 'title page)
     (`#(ok ,title) title)
-    (_ (case (first-h1-title (binary:split (maps:get 'body page) #b("\n") (list 'global)))
+    (_ (case (first-h1-title (maps:get 'headings
+                         (ldoc-markup:scan (maps:get 'body page))))
          (title (when (is_binary title)) title)
          (_ (let* ((path (maps:get 'path page))
               (parts (binary:split path #b("/") (list 'global)))
@@ -568,28 +642,15 @@ paragraph bidi policy."
 (defun first-h1-title (lines)
   (case lines
     (() 'none)
-    ((cons line rest)
-     (if (andalso (>= (byte_size line) 3)
-                  (=:= (binary:part line 0 2) #b("# ")))
-         (string:trim (binary:part line 2 (- (byte_size line) 2)))
+    ((cons heading rest)
+     (if (=:= (element 1 heading) 1)
+         (string:trim (element 2 heading))
          (first-h1-title rest)))
     (_ 'none)))
 (defun markdown-has-h1? (body)
-  (case (binary:split body #b("\n") (list 'global))
-    (() 'false)
-    ((cons line rest)
-     (if (andalso (>= (byte_size line) 3)
-                  (=:= (binary:part line 0 2) #b("# ")))
-         'true
-         (markdown-has-h1-lines? rest)))))
-(defun markdown-has-h1-lines? (lines)
-  (case lines
-    (() 'false)
-    ((cons line rest)
-     (if (andalso (>= (byte_size line) 3)
-                  (=:= (binary:part line 0 2) #b("# ")))
-         'true (markdown-has-h1-lines? rest)))
-    (_ 'false)))
+  (let* ((scan (ldoc-markup:scan body))
+         (headings (maps:get 'headings scan)))
+    (lists:any (lambda (heading) (=:= (element 1 heading) 1)) headings)))
 (defun navigation-languages (languages current-item)
   (lists:map (lambda (language)
                (list #b("<section class=\"language-group\"><h2 class=\"nav-title\">Language ")
@@ -658,8 +719,24 @@ paragraph bidi policy."
                           (uppercase-hex (maps:get 'name definition)) #b("-")
                           (arity-text (maps:get 'arity definition)))))
 (defun render-definitions (module options)
-  (lists:map (lambda (definition) (render-definition module definition options))
-             (maps:get 'definitions module)))
+  (let* ((format (maps:get 'format module))
+         (locale (maps:get 'locale options))
+         (initial (markdown-heading-count
+                    format (maps:get 'doc module) locale)))
+    (element 1 (lists:mapfoldl
+      (lambda (definition offset)
+        (let* ((count (markdown-heading-count format (maps:get 'doc definition) locale))
+               (definition-options (maps:put 'document_heading_count count
+                                   (maps:put 'document_heading_offset offset options)))
+               (rendered (render-definition module definition definition-options)))
+          `#(,rendered ,(+ offset count))))
+      initial (maps:get 'definitions module)))))
+
+(defun markdown-heading-count (format doc locale)
+  (case (selected-markdown-body format doc locale)
+    (body (when (is_binary body))
+     (length (maps:get 'headings (ldoc-markup:scan body))))
+    (_ 0)))
 (defun render-definition (module definition options)
   (list #b("<section class=\"definition\" id=\"")
         (definition-id definition)
@@ -701,19 +778,38 @@ paragraph bidi policy."
 (defun render-doc-map (format doc options)
   (case (select-locale doc (maps:get 'locale options))
     ('none #b("<p class=\"state\">No documentation text is available.</p>"))
-    (choice (render-doc-choice format choice))))
-(defun render-doc-choice (format choice)
+    (choice (render-doc-choice format choice options))))
+(defun render-doc-choice (format choice options)
   (case choice
     (`#(,locale ,value)
      (case value
        (#b() #b("<p class=\"state\">Documentation text is empty.</p>"))
-       (_ (case (ldoc-markup:render format value)
+       (_ (case (render-contextual-doc format value options)
             (`#(ok ,html)
              (list #b("<div class=\"doc\"") (language-attribute locale)
                    #b(">") html #b("</div>")))))))))
+(defun render-contextual-doc (format value options)
+  (let* ((route (maps:get 'document_route options 'none))
+         (contexts (maps:get 'document_contexts options #m())))
+    (case (maps:find route contexts)
+      (`#(ok ,context)
+       (ldoc-markup:render format value
+         (maps:put 'heading_count (maps:get 'document_heading_count options
+                                    (- (length (maps:get 'headings context))
+                                       (maps:get 'document_heading_offset options 0)))
+           (maps:put 'heading_offset (maps:get 'document_heading_offset options 0) context))))
+      (_ (ldoc-markup:render format value)))))
 (defun render-markdown (text)
   (case (ldoc-markup:render #b("text/markdown") text)
     (`#(ok ,html) html)))
+(defun render-document-markdown (text options path)
+  (let ((contexts (maps:get 'document_contexts options #m())))
+    (case (maps:find path contexts)
+      (`#(ok ,context)
+       (case (ldoc-markup:render #b("text/markdown") text context)
+         (`#(ok ,html) html)
+         (_ (render-markdown text))))
+      (_ (render-markdown text)))))
 (defun select-locale (doc locale)
   (case (maps:find locale doc)
     (`#(ok ,value) `#(,locale ,value))

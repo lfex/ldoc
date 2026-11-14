@@ -36,7 +36,8 @@ power-loss atomic transaction."
 `locale` (a nonempty UTF-8 binary, default `<<\"en\">>`).
 
 Each release spec has an exact `release` map and may declare `overview`,
-`source_root`, and `source_base`. Options, store root, absolute fresh target, and
+`overview_path`, ordered portable `pages`, `source_root`, and `source_base`.
+Options, store root, absolute fresh target, and
 release list are validated; all store/view/render inputs are prepared before
 the exclusive target claim. Existing targets are never replaced. Success
 returns `{ok, IndexPathBinary}`. Read/render errors carry the exact release and stage;

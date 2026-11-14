@@ -176,7 +176,7 @@ Invalid option maps return `{error, invalid_options}`; malformed or unsupported
 views return `{error, invalid_view}`. Rendering is in-memory and does not read
 files, load target modules, access the network, or mutate the stored release.
 
-Options are a map containing only:
+Options accept:
 
 - `locale`: a nonempty UTF-8 binary, default `<<"en">>`.
 - `overview`: UTF-8 Markdown binary for the overview introduction, default
@@ -189,6 +189,10 @@ Options are a map containing only:
   catalogue. This fixed parent link is intended for a release page inside a
   versioned site directory; ordinary single-release exports keep the original
   header by default.
+- `pages`: an ordered list of portable Markdown page maps, enabled by key
+  presence, including `[]` for docs navigation without extra pages.
+- `overview_path`: the logical `.md` identity for `overview`; requires the
+  `pages` key.
 
 The requested locale still selects documentation by exact key, then `und`,
 then the first key in lexical order. A selected body receives an HTML `lang`
@@ -228,9 +232,9 @@ The Markdown renderer implements a safe documented subset: paragraphs, ATX
 headings, unordered and decimal ordered lists, blockquotes, fenced code, pipe
 tables, inline code, strong/emphasis, and inline links. It is not a full
 CommonMark implementation. Raw HTML is shown as escaped text, unsupported
-syntax remains text, and images do not fetch remote content. Links are retained
-only for validated absolute HTTP, HTTPS, or mailto targets; unsafe and
-unsupported targets remain text. `application/erlang+html` documentation uses
+syntax remains text, and images do not fetch remote content. Without the
+`pages` option, links are retained only for validated absolute HTTP, HTTPS, or
+mailto targets; unsafe and unsupported targets remain text. `application/erlang+html` documentation uses
 an allowlisted walker for nested native EDoc tags and validated link attributes;
 unknown tags unwrap safe children, while unsupported nodes are escaped.
 Producer HTML attributes such as `id`, `class`, `style`, and event handlers are
@@ -276,12 +280,44 @@ rejected as `{error, invalid_options}`. The site builder accepts the same
 `pages` and `overview_path` keys on an individual release specification and
 prepares them before claiming its fresh output directory.
 
+In pages mode, Markdown headings receive stable `h-` IDs derived from their
+plain inline labels. Labels are recursively reduced through links, code,
+emphasis, and strong text, then NFC-normalised and lowercased. Punctuation
+is discarded; Unicode letters, marks, digits, underscores, and hyphens remain,
+while whitespace becomes a hyphen and edge hyphens are trimmed. An empty slug
+becomes `section`. Repeated slugs receive the first unused numeric suffix. For
+the headings `Guide`, `Guide`, `Guide-1`, the IDs end in `h-guide`,
+`h-guide-1`, and `h-guide-1-1`.
+Fragments are percent-decoded once and matched exactly after NFC. A bare `#`
+targets the page's `main` element; `page.md#` targets that page without a
+heading fragment.
+
+Relative `.md` links resolve from the page's logical directory; `../` is
+allowed while the resolved path stays inside the project. Overview always has
+the `index.html` route, selected pages use flat `p-` plus SHA-256 routes, and
+API Markdown uses its existing module route. Module and definition Markdown
+bodies share one heading namespace on their module page, while local relative
+links use the project's logical root as their base. Repository links that do
+not target Markdown files remain readable text, and unsafe URI schemes are not
+made clickable.
+
+An unknown page or fragment returns
+`{error, {documentation_link, #{document => LogicalPath, href => OriginalHref,
+reason => Reason}}}`. `Reason` is `{unknown_page, CanonicalTargetPath}`,
+`{unknown_fragment, TargetDocument, DecodedNfcFragment}`, or
+`{invalid_local_link, Detail}`. `Detail` is one of `malformed_uri`,
+`malformed_percent`, `invalid_utf8`, `forbidden_character`, `absolute_path`,
+`query_not_supported`, `root_escape`, or `unsupported_path`. Queries on local
+Markdown links are rejected; links to non-Markdown assets such as
+`LICENSE?raw=1` remain literal text.
+
 ## Build a versioned local site
 
 `ldoc-site:build/3` composes exact stored releases through the public store,
 analysis-view, and HTML-renderer APIs. Supply a nonempty proper list of
 release specifications. Each map has a required exact `release` key and may
-include `overview`, `source_root`, and `source_base`. Release keys are not
+include `overview`, `overview_path`, ordered `pages`, `source_root`, and
+`source_base`. Release keys are not
 normalized or semver-sorted; the catalogue groups exact namespace/package
 coordinates and lists their exact versions bytewise. The optional fourth
 argument accepts only `locale`. Every release is prepared before the builder
