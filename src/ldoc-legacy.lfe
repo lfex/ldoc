@@ -16,11 +16,14 @@ source lines, patterns, export flags, and source declaration."
 The complete ETF term must contain proper binary module/doc lines and
 supported function or macro entries with valid patterns, export flags,
 positive source lines, and unique identities. Original lines, patterns, and
-export metadata are retained; lines are joined with newlines under
-`und`, and empty text becomes `none`. SOURCE is copied through as a
-declaration, not authenticated. Module annotation is `undefined`, and macro
-arity remains `unknown`. Success returns `{ok, ModuleMap}`; malformed ETF or record
-data returns `{error, invalid_ldoc}`. Pattern data is never executed; no files are read."
+export metadata are retained. Module and entry line lists are joined with
+newlines under `und`; only an empty line list
+becomes `none`. A nonempty line list such as `[<<>>]` produces an `und`
+entry with an empty binary body. SOURCE is copied through as a declaration, not
+authenticated. Module annotation is `undefined`, and macro arity remains
+`unknown`. Success returns `{ok, ModuleMap}`; malformed ETF or record data
+returns `{error, invalid_ldoc}`. Pattern data is never executed; no files are
+read."
   (case (ldoc-etf:decode chunk-bytes)
     (`#(ok ,term)
      (normalize module source term))

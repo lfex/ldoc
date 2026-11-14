@@ -36,8 +36,9 @@ predicate does not inspect files."
   "Project DOCSET into the default native analysis view without source
 references.
 
-Success returns `{ok, View}`; an invalid docset returns `{error, invalid_docset}`. The view
-groups languages, modules, and visible definitions deterministically,
+Success returns `{ok, View}`; an invalid docset returns
+`{error, invalid_docset}`. The view groups languages, modules, and visible
+definitions deterministically,
 retains supported native kinds, excludes internal entries, and preserves
 documentation state. It performs no file IO or target loading."
 
@@ -52,9 +53,11 @@ and identities are sorted; internal entries are excluded, hidden modules
 remain but suppress definitions and source, and hidden definition docs
 remain represented. Signatures and patterns are selected producer fields,
 not pretty-printed raw typed specs. A source reference is emitted only from
-explicit recorded provenance lexically beneath the declared root with a
-known positive line; no filesystem, symlink, existence, or authenticity
-check occurs. Returns `{ok, View}`, `{error, invalid_options}`, or `{error, invalid_docset}`."
+recorded provenance that provides a source path lexically beneath the declared
+root. A line is included only when a known positive line is available; it is
+optional. No filesystem, symlink, existence, or authenticity check occurs.
+Returns `{ok, View}`, `{error, invalid_options}`, or
+`{error, invalid_docset}`."
 
   (case (validate-options options)
     (`#(ok ,root)

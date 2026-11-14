@@ -9,10 +9,13 @@ only. Neither reader loads the target module or searches the code path.
 ## Install from a published release
 
 The normal user route clones the latest published GitHub release and installs
-the standalone command under an absolute prefix. It needs Git, Make, Erlang/OTP,
-and Rebar3. Rebar3 3.28.0 is the version verified here; this source is tested
-with OTP 27, 28, and 29. Automatic
-latest-release selection also needs `gh` authenticated to GitHub. To skip `gh`,
+the standalone command under an absolute prefix. It needs Git, Make, Erlang/OTP
+with its compiler and `crypto` application, and Rebar3. Rebar3 3.28.0 is the
+version verified here; this source is tested with OTP 27, 28, and 29. For Erlang
+source-comment conversion, the OTP EDoc application must provide
+`edoc_doclet_chunks` and `edoc_layout_chunks`; ldoc reports an error when those
+chunk tools are unavailable. Automatic latest-release selection also needs
+`gh` authenticated to GitHub. To skip `gh`,
 set `ldoc_tag` in the calling shell to an actual published tag shown on the
 [ldoc Releases page](https://github.com/lfex/ldoc/releases).
 
@@ -30,8 +33,6 @@ set `ldoc_tag` in the calling shell to an actual published tag shown on the
   git clone --depth 1 --branch "$ldoc_tag" https://github.com/lfex/ldoc.git "$ldoc_work/source"
   make -C "$ldoc_work/source" install PREFIX="$ldoc_prefix"
 )
-export PATH="$HOME/.local/bin:$PATH"
-ldoc --help
 ```
 
 This pre-release source has no published ldoc release yet, so the public
@@ -41,10 +42,23 @@ substitute a development branch or commit.
 
 The recipe resolves a relative `PREFIX` to an absolute path before `make -C`
 changes directories, then removes only its unique temporary clone/build root.
-The installed command remains outside that root. The default install is
-`$HOME/.local/bin/ldoc`; for a custom prefix, add that prefix's absolute `bin`
-directory to `PATH`, for example `export PATH="/absolute/prefix/bin:$PATH"`.
-A relative PATH entry may point somewhere else after later directory changes.
+The installed command remains outside that root. After installation succeeds,
+set `PATH` and check the command using the matching prefix. For the default
+`$HOME/.local` prefix:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+ldoc --help
+```
+
+For a custom prefix, replace the example with the normalized absolute prefix
+used for installation; do not use a relative PATH entry that may point
+somewhere else after a later directory change:
+
+```sh
+export PATH="/absolute/prefix/bin:$PATH"
+ldoc --help
+```
 
 ### Install from a source checkout
 
@@ -97,8 +111,9 @@ contexts and unavailable EDoc chunk tools fail visibly.
 `ldoc build PROJECT --output FRESH_ROOT --overview FILE --namespace TEXT
 --package TEXT --source-root ROOT --source-base URL` lists the optional
 arguments. Namespace defaults to `local`; package and exact version default to
-the compiled application identity. The installed command path, install prefix, and generated output paths support
-spaces and Unicode when native filename encoding is UTF-8. A project path used
+the compiled application identity. The installed command path, install prefix,
+and generated output paths support spaces and Unicode when native filename
+encoding is UTF-8. A project path used
 for a cold dependency build is subject to the pinned LFE 2.2.2 dependency's
 `app_compile` hook, which constructs a command with an unquoted path; use a
 space-free source/cache/build root for that cold build.
@@ -173,7 +188,8 @@ absolute source root with `view/2`:
 ```
 
 Only recorded source-file provenance beneath that root can produce a
-relative path and a known positive line. This is lexical projection: it does
+relative path; a known positive line is included when available. This is
+lexical projection: it does
 not inspect the filesystem, resolve symlinks, verify file existence, or
 authenticate the caller's declaration. It never infers a source from a BEAM
 or sidecar path, and it leaves path-like prose unchanged. A rendered source
@@ -227,7 +243,9 @@ attribute only when the key matches ldoc's conservative subset: a two- or
 three-letter primary language, optionally followed by a four-letter script
 and a two-letter or three-digit region. The primary `und` is never annotated.
 Other valid UTF-8 keys still select and render their text without a `lang`
-attribute; this subset is not full BCP 47 validation.
+attribute; this subset is not full BCP 47 validation. The generated interface
+chrome is English and left-to-right. Preserving Unicode and selecting a
+locale do not apply an automatic paragraph-level bidirectional-text policy.
 
 Example: export the returned bundle beneath a caller-selected directory and
 open the generated overview. The example's source URL is an explicit caller
@@ -363,7 +381,10 @@ upstream source or assets.
 
 ## Generate an EEP-48 sidecar with EDoc
 
-For a source-comment module, compile and run OTP EDoc as a caller step. Use a fresh trusted package or output directory so an old chunk cannot be mistaken for the current conversion. The package layout is `ebin/<module>.beam` beside `doc/chunks/<module>.chunk`.
+For a source-comment module, compile and run OTP EDoc as a caller step. Use a
+fresh trusted package or output directory so an old chunk cannot be mistaken
+for the current conversion. The package layout is `ebin/<module>.beam` beside
+`doc/chunks/<module>.chunk`.
 
 ```erlang
 {ok, Module, Beam} =
@@ -380,22 +401,52 @@ ok = edoc:files([SourcePath],
                  {includes, [IncludeDir]}]).
 ```
 
-Then collect the package BEAM. The second form records the caller's source and include declaration with the sidecar result; it does not run EDoc or verify those paths.
+Then collect the package BEAM. The second form records the caller's source and
+include declaration with the sidecar result; it does not run EDoc or verify
+those paths.
 
 ```erlang
 'ldoc-beam':collect(BeamPath).
 'ldoc-beam':collect(BeamPath, {edoc, SourcePath, [IncludeDir]}).
 ```
 
-The declaration is preserved as `conversion => #{tool => edoc, source_path => SourcePath, include_paths => IncludeDirs, evidence => caller_declared}` only when a sidecar is selected. Embedded results keep their original source map. A nonempty string or binary source path and a proper list of nonempty string or binary include paths are required; the include list may be empty.
+The declaration is preserved as
+`conversion => #{tool => edoc, source_path => SourcePath,
+                include_paths => IncludeDirs, evidence => caller_declared}`
+only when a sidecar is selected. Embedded results keep their original source
+map. A nonempty string or binary source path and a proper list of nonempty
+string or binary include paths are required; the include list may be empty.
 
 ## Collect classic LFE documentation
 
-`collect/1` also reads the versioned `LDoc` chunk emitted by LFE 1.2.0, after embedded EEP-48 `Docs` and an eligible same-package sidecar are absent. The legacy record is decoded from the bytes read from the supplied BEAM; the module is not loaded. `read-docs/1` remains an embedded `Docs`-only operation and returns `missing_docs` for a classic-only artifact.
+`collect/1` also reads the versioned `LDoc` chunk emitted by LFE 1.2.0,
+after embedded EEP-48 `Docs` and an eligible same-package sidecar are absent.
+The legacy record is decoded from bytes read from the supplied BEAM; the module
+is not loaded. `read-docs/1` remains an embedded `Docs`-only operation and
+returns `missing_docs` for a classic-only artifact.
 
-The result uses the shared module and entry maps. Its source is `#{carrier => embedded_beam, path => Path, chunk => <<"LDoc">>, legacy_version => lfe_docs_v1, format_policy => lodox_markdown}`. The producer did not record a module annotation or a documentation locale, so the module annotation is `undefined` and nonempty docs use `#{<<"und">> => Text}`. The text joins the original binary lines with newlines; the exact source lines remain in `metadata.legacy_doc_lines`. Entry `patterns` retain the original function and macro terms, including guarded clauses. The entry metadata retains `legacy_doc_lines` and `legacy_exported`; function lines become annotations and signatures are empty. Legacy macro arity is `unknown`, even if a clause looks fixed-arity. Empty producer doc lists remain `none`. Lodox interpreted these docstrings as Markdown.
+The result uses the shared module and entry maps. Its source is
+`#{carrier => embedded_beam, path => Path, chunk => <<"LDoc">>,
+  legacy_version => lfe_docs_v1, format_policy => lodox_markdown}`. The
+producer did not record a module annotation or a documentation locale, so the
+module annotation is `undefined`; nonempty line lists use
+`#{<<"und">> => Text}`. Module and entry line lists are joined with newlines.
+Only an empty line list becomes `none`; a nonempty list such as `[<<>>]`
+remains an `und` entry with an empty binary body. The exact original lines
+remain in `metadata.legacy_doc_lines`. Entry `patterns` retain the original
+function and macro terms, including guarded clauses. Entry metadata retains
+`legacy_doc_lines` and `legacy_exported`; function lines become annotations
+and signatures are empty. Legacy macro arity is `unknown`, even if a clause
+looks fixed-arity. Empty producer doc lists remain `none`. Lodox interpreted
+these docstrings as Markdown.
 
-The selection order is embedded `Docs`, an associated sidecar under the immediate package root, then `LDoc` from the same BEAM bytes. Only an exact `missing_docs` result from sidecar selection advances to `LDoc`; present invalid Docs, sidecar read failures, and rejected sidecar associations stay errors. A missing `LDoc` chunk returns `missing_docs`; a malformed or unsupported versioned payload returns `invalid_ldoc`. The `LDoc` adapter preserves producer patterns as data and does not execute them.
+The selection order is embedded `Docs`, an associated sidecar under the
+immediate package root, then `LDoc` from the same BEAM bytes. Only an exact
+`missing_docs` result from sidecar selection advances to `LDoc`; present invalid
+Docs, sidecar read failures, and rejected sidecar associations stay errors. A
+missing `LDoc` chunk returns `missing_docs`; a malformed or unsupported
+versioned payload returns `invalid_ldoc`. The `LDoc` adapter preserves
+producer patterns as data and does not execute them.
 
 ### Reproduce the classic fixture
 
@@ -422,6 +473,17 @@ shasum -a 256 "$WORK/source/ldoc-legacy.ldoc"
 
 The expected raw LDoc chunk is 555 bytes with SHA-256 `a4191d04427134e4ffb4e28011f1b97dcff754609b394e6e23e801c1fb2a8ea6`. Compare those extracted bytes with a separately extracted chunk from the shipped BEAM fixture. The full BEAM may differ because compiler metadata records the source path.
 
-For sidecars, ldoc uses the module identity read from the supplied BEAM and checks only the immediate package root above its `ebin` directory. It does not infer identity from the filename, walk ancestors, or consult the VM code path. Embedded docs are authoritative, including `hidden` and `none`; only a missing embedded chunk advances to the sidecar. A malformed embedded chunk remains `invalid_docs` even if a sidecar exists.
+For sidecars, ldoc uses the module identity read from the supplied BEAM and
+checks only the immediate package root above its `ebin` directory. It does not
+infer identity from the filename, walk ancestors, or consult the VM code path.
+Embedded docs are authoritative, including `hidden` and `none`; only a missing
+embedded chunk advances to the sidecar. A malformed embedded chunk remains
+`invalid_docs` even if a sidecar exists.
 
-Filesystem errors retain tagged reasons (`read_beam` or `read_sidecar`). Invalid BEAMs, missing docs, invalid docs, invalid package associations, and invalid EDoc provenance have distinct tagged errors. Sidecars contain no module/build identity to authenticate their contents, so collection assumes a trusted package with stable contents. Do not use this reader for hostile or public artifacts; atom creation and resource bounds need a separate isolation design.
+Filesystem errors retain tagged reasons (`read_beam` or `read_sidecar`).
+Invalid BEAMs, missing docs, invalid docs, invalid package associations, and
+invalid EDoc provenance have distinct tagged errors. Sidecars contain no
+module/build identity to authenticate their contents, so collection assumes a
+trusted package with stable contents. Do not use this reader for hostile or
+public artifacts; atom creation and resource bounds need a separate isolation
+design.

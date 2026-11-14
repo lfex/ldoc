@@ -69,14 +69,15 @@ association, malformed classic LDoc, or missing documentation."
   "Collect documentation from PATH with optional caller-declared EDoc
 conversion context.
 
-PROVENANCE must be `{edoc, Source, Includes}` with a nonempty path and a proper list of valid
-include paths. This provenance value is validated before artifact
-collection, even when embedded Docs take precedence. Conversion context is
-recorded only if a sidecar is selected. The function does not run EDoc or
-authenticate the source claim. Carrier precedence and absence-only fallback
-match `collect/1`. Invalid provenance returns `invalid_edoc_provenance`; selected carrier,
-association, and file failures retain their specific tagged errors. No
-target module is loaded."
+PROVENANCE must be `{edoc, Source, Includes}` with a nonempty path and a
+proper list of valid include paths. It is validated before artifact collection,
+even when embedded Docs take precedence. Conversion context is recorded only
+if a sidecar is selected. The function does not run EDoc or authenticate the
+source claim. Carrier precedence and absence-only fallback match `collect/1`.
+Success returns `{ok, ModuleMap}`; failures return `{error, Reason}`,
+including `{error, invalid_edoc_provenance}`. Selected carrier, association,
+and file failures retain their specific tagged reasons. No target module is
+loaded."
 
   (case provenance
     (`#(edoc ,source-path ,include-dirs)
