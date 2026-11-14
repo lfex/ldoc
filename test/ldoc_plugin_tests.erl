@@ -163,7 +163,13 @@ symlink_build_ancestor_is_refused(Rebar, Root, Workspace) ->
     Sentinel = filename:join([External, "default", "keep"]),
     ok = file:write_file(Sentinel, <<"build sibling">>),
     ok = file:make_symlink(External, Build),
-    ?assertMatch({error, _}, command(Rebar, ["ldoc"], Root)),
+    Result = command(Rebar, ["ldoc"], Root),
+    case Result of
+        {error, {Status, Output}} when Status =/= 0 ->
+            ?assertNotEqual(nomatch, binary:match(Output, <<"unsafe_ancestor">>));
+        Other ->
+            ?assertEqual(expected_nonzero_unsafe_ancestor, Other)
+    end,
     ?assertEqual({ok, <<"build sibling">>}, file:read_file(Sentinel)).
 
 make_plugin_source(Git, SourceRoot, PluginSource) ->
