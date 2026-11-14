@@ -120,8 +120,9 @@
 (defun prepare-graph (documents)
   "Prepare contexts from ordered, already-selected document maps.
 Each map must contain a unique canonical logical `path`, its assigned output
-`route`, and a UTF-8 `body` binary or ordered UTF-8 `blocks` binaries. Callers
-validate and NFC-normalise page identities before this internal operation.
+`route`, and a UTF-8 `body` binary; ordered UTF-8 `blocks` binaries are optional.
+Callers validate and NFC-normalise page identities before this internal
+operation.
 Returns a path-to-context map or an option/documentation-link error; performs
 no file or network IO."
   (case (index-documents documents #m() #m())

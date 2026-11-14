@@ -1447,6 +1447,15 @@ html_s01_s06(Temp, StoreRoot, Docset1, Docset2,
           <<"text/markdown">>, <<"# Heading">>,
           #{headings => [<<"h-heading">>], links => #{}, heading_offset => bad})),
         ?assertEqual({error, invalid_documentation}, 'ldoc-markup':render(
+          <<"text/markdown">>, <<"# Test">>,
+          #{headings => [], links => #{}})),
+        ?assertEqual({error, invalid_documentation}, 'ldoc-markup':render(
+          <<"text/markdown">>, <<"# Test">>,
+          #{headings => [<<"h-", 255>>], links => #{}})),
+        ?assertEqual({error, invalid_documentation}, 'ldoc-markup':render(
+          <<"text/markdown">>, <<"# Test">>,
+          #{headings => [<<"h-test">> | bad], links => #{}})),
+        ?assertEqual({error, invalid_documentation}, 'ldoc-markup':render(
           <<"text/markdown">>, <<"[unsafe](x)">>,
           #{headings => [], links => #{<<"x">> => <<"javascript:alert(1)">>}})),
         ?assertMatch({error, {documentation_link, _}},

@@ -79,7 +79,7 @@ data returns `invalid_documentation`."
     (andalso (lists:all (lambda (key)
                           (lists:member key '(headings links heading_offset heading_count)))
                         (maps:keys context))
-      (andalso (is_list (maps:get 'headings context ()))
+      (andalso (proper-list? (maps:get 'headings context ()))
       (andalso (lists:all #'valid-heading-id?/1 (maps:get 'headings context ()))
       (andalso (is_map (maps:get 'links context #m()))
       (andalso (lists:all #'valid-context-link?/1 (maps:to_list (maps:get 'links context #m())))
@@ -97,9 +97,15 @@ data returns `invalid_documentation`."
         'false)))
 (defun valid-heading-id? (id)
   (andalso (is_binary id)
+    (andalso (valid-utf8? id)
     (andalso (>= (byte_size id) 3)
       (andalso (=:= (binary:part id 0 2) #b("h-"))
-               (valid-context-bytes? id 0)))))
+               (valid-context-bytes? id 0))))))
+(defun proper-list? (value)
+  (case value
+    (() 'true)
+    ((cons _ rest) (proper-list? rest))
+    (_ 'false)))
 (defun valid-context-link? (pair)
   (case pair
     (`#(,href ,target)
@@ -166,13 +172,16 @@ data returns `invalid_documentation`."
     (_ (let* ((all-ids (maps:get 'headings context ()))
               (offset (maps:get 'heading_offset context 0))
               (count (maps:get 'heading_count context (- (length all-ids) offset)))
+              (actual-heading-count (length (maps:get 'headings (scan text))))
               (ids (lists:sublist (lists:nthtail offset all-ids) count)))
-         (case (context-markdown-lines
-                 (binary:split text #b("\n") (list 'global))
-                 'normal context ids)
-           (`#(,html ,remaining)
-            (if (=:= remaining ()) `#(ok ,(iolist_to_binary html))
-                '#(error invalid_documentation))))))))
+         (if (=:= count actual-heading-count)
+             (case (context-markdown-lines
+                     (binary:split text #b("\n") (list 'global))
+                     'normal context ids)
+               (`#(,html ,remaining)
+                (if (=:= remaining ()) `#(ok ,(iolist_to_binary html))
+                    '#(error invalid_documentation))))
+             '#(error invalid_documentation))))))
 
 (defun context-markdown-lines (lines mode context ids)
   (case lines
