@@ -216,7 +216,7 @@ collect(Port, Acc) ->
         {Port, {exit_status, Status}} ->
             {error, {Status, iolist_to_binary(lists:reverse(Acc))}}
     after 15000 ->
-        _ = catch port_close(Port),
+        _ = try port_close(Port) catch error:badarg -> ok end,
         {error, timeout}
     end.
 
