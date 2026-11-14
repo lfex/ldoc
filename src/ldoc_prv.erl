@@ -20,6 +20,8 @@ init(State) ->
         {bare, true},
         {deps, []},
         {example, "rebar3 ldoc"},
+        {short_desc, "Build a native Erlang and LFE reference"},
+        {desc, "Builds the current flat default-profile project and refreshes the ldoc reference."},
         {opts, [{output, $o, "output", string, "Fresh explicit output root"},
                 {overview, undefined, "overview", string, "Overview Markdown file"},
                 {namespace, undefined, "namespace", string, "Release namespace"},
@@ -69,7 +71,8 @@ run_explicit(State, Root, Output, Options, Rebar3) ->
         {error, Reason} -> {error, {?MODULE, Reason}}
     end.
 
-provider_options(Args) when is_list(Args) ->
+provider_options({[help], []}) -> {error, help_requested};
+provider_options({Options, []}) when is_list(Options) ->
     try {ok, maps:fold(fun
         (output, Value, Acc) -> put_option("--output", Value, Acc);
         (overview, Value, Acc) -> put_option("--overview", Value, Acc);
@@ -78,9 +81,11 @@ provider_options(Args) when is_list(Args) ->
         (source_root, Value, Acc) -> put_option("--source-root", Value, Acc);
         (source_base, Value, Acc) -> put_option("--source-base", Value, Acc);
         (Key, _Value, _Acc) -> throw({unsupported_option, Key})
-    end, #{}, Args)}
+    end, #{}, maps:from_list(Options))}
     catch throw:Reason -> {error, Reason}; error:Reason -> {error, {invalid_options, Reason}}
     end;
+provider_options({_Options, Positionals}) when is_list(Positionals), Positionals =/= [] ->
+    {error, {unexpected_arguments, Positionals}};
 provider_options(Args) -> {error, {invalid_options, Args}}.
 
 put_option(Flag, Value, Acc) when is_list(Value), Value =/= [] ->
