@@ -52,10 +52,10 @@ the official combined source-and-docs Hex provider once. The staging tree is
 removed on exit while `make docs` output stays available. The dry-run builds
 both payloads without uploading either package. A real publish needs the maintainer's normal
 Hex authorization. The official source package can be written for inspection
-with `rebar3 hex build package --output /absolute/path/ldoc-0.1.0.tar`;
-`--output` names the tarball file and its parent directory must exist. The
-package metadata and file list identify the source release, while the generated
-site supplies its docs package. No prebuilt executable is produced by these commands.
+with `rebar3 hex build package`. Its default output is
+`_build/default/lib/ldoc/hex/ldoc-0.1.0.tar` after the application is built.
+The package metadata and file list identify the source release, while the
+generated site supplies its docs package. No prebuilt executable is produced by these commands.
 
 ## Use the library pipeline
 

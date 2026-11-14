@@ -96,8 +96,8 @@ uploading either package. A real publish requires the maintainer's normal
 Hex authorization.
 
 To inspect the official source package separately, run
-`rebar3 hex build package --output /absolute/path/ldoc-0.1.0.tar`; the
-`--output` value names the tarball file, and its parent directory must exist.
+`rebar3 hex build package`. The default output is
+`_build/default/lib/ldoc/hex/ldoc-0.1.0.tar` after the application is built.
 The package contains the application source, tests, README, overview, LICENSE,
 Makefile, and Rebar configuration/lock. The companion docs package is generated
 from the same versioned site used by the combined provider. These source/docs
