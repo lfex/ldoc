@@ -14,7 +14,7 @@ native snapshots and renders a static HTML reference.
 
 <p align="center">
   <a href="priv/images/ldoc-liffybot.png">
-    <img src="priv/images/ldoc-liffybot.png" width="440" alt="LiffyBot reading beneath an autumn tree and lantern, rendered as a hand-coloured linocut.">
+    <img src="priv/images/ldoc-liffybot.png" width="440" alt="LiffyBot, red LED alight, reading beneath an autumn tree and lantern with an Erlang mug beside him, rendered as a hand-coloured linocut.">
   </a>
 </p>
 
