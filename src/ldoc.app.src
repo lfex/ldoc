@@ -23,4 +23,5 @@
              ldoc,
              ldoc_cli,
              ldoc_prv,
+             ldoc_project_pages,
              'ldoc-store']}]}.

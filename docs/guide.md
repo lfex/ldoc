@@ -4,6 +4,7 @@ Contents
 
 - [Overview](#overview)
 - [Build a local reference](#build-a-local-reference)
+- [Select project Markdown pages](#select-project-markdown-pages)
 - [Store exact release snapshots](#store-exact-release-snapshots)
 - [Build a native analysis view](#build-a-native-analysis-view)
 - [Render a local HTML reference](#render-a-local-html-reference)
@@ -24,6 +25,19 @@ LDoc from the same BEAM. It falls back only when a carrier is absent.
 or searches the code path.
 
 ## Build a local reference
+
+To add project documentation, put a literal page list in `rebar.config`:
+
+```erlang
+{ldoc, [{pages, ["docs/guide.md",
+                 {"docs/maintainers.md", "Maintainer guide"}]}]}.
+```
+
+The list order sets navigation order. A tuple supplies an optional visible
+title. `{ldoc, [{pages, []}]}.` enables contextual Markdown links without extra pages.
+Repeat `--page PATH` on `rebar3 ldoc` or standalone `ldoc build` to replace the
+configured list for that run. The full [page selection and path policy](#select-project-markdown-pages)
+is described below.
 
 Install the [standalone command](maintainers.md#install-the-standalone-command-from-a-source-checkout)
 if needed. From a trusted flat single-application checkout, run:
@@ -61,8 +75,8 @@ it does not run EDoc or authenticate source paths. EDoc generation failures
 retain the newly owned partial output for diagnosis; unsupported preprocessing
 contexts and unavailable EDoc chunk tools fail visibly.
 
-`ldoc build PROJECT --output FRESH_ROOT --overview FILE --namespace TEXT
---package TEXT --source-root ROOT --source-base URL` lists the optional
+`ldoc build PROJECT --output FRESH_ROOT --overview FILE --overview-path LOGICAL.md
+--page PATH --namespace TEXT --package TEXT --source-root ROOT --source-base URL` lists the optional
 arguments. Namespace defaults to `local`; package and exact version default to
 the compiled application identity. The installed command path, install prefix,
 and generated output paths support spaces and Unicode when native filename
@@ -254,6 +268,37 @@ inferred types by this API; signatures and classic patterns are the selected
 native view's documented presentation fields.
 
 ## Render selected Markdown pages
+
+### Select project Markdown pages
+
+Both ordinary build routes read the literal top-level `rebar.config` setting
+`{ldoc, [{pages, [...]}]}.` Each entry is a project-relative `.md` filename
+or `{Path, Title}`. Paths are read in declaration order and only the selected
+files are opened. The complete static declaration is checked before any
+`--page` override is applied, so a malformed unused declaration still fails.
+Repeat `--page PATH` to replace the configured list in order:
+
+```sh
+rebar3 ldoc --page docs/setup.md --page docs/reference.md
+"$HOME/.local/bin/ldoc" build "$PWD" --output "$PWD/reference" \
+  --page docs/setup.md --page docs/reference.md
+```
+
+Page files must be ordinary regular files reached through ordinary directories
+beneath the project root. Symlinks, missing files, FIFOs and other special
+files are refused before reading. Physical names retain their raw Unicode;
+logical document identities are NFC-normalised, so canonically equivalent
+paths collide. Use nonblank UTF-8 titles. `--overview` keeps its caller-CWD
+relative or absolute physical-path behavior. When pages are configured, an
+inside-project overview receives its project-relative identity automatically;
+an outside overview requires `--overview-path LOGICAL.md`, which must be a
+valid project-relative `.md` identity with no page collision. The alias is
+invalid when contextual pages mode is absent.
+
+The adapter reports structured `documentation_pages` errors at config,
+overview or input stages. Rebar config is trusted static input; project build
+scripts continue to run during the normal compile, but script-generated page
+selection is outside this configuration contract.
 
 Portable callers can add an ordered set of project documentation pages to the
 in-memory HTML bundle. Each page has a project-relative `.md` path and UTF-8

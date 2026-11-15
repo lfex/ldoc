@@ -32,6 +32,9 @@ become a runtime dependency of the documented application.
 
 ## Documentation
 
+Select project Markdown pages with the ordinary `{ldoc, [{pages, [...]}]}`
+setting in `rebar.config`; see the [page selection guide](docs/guide.md#select-project-markdown-pages).
+
 - [User guide](docs/guide.md): collection, snapshots, analysis, and rendering.
 - [Maintainer guide](docs/maintainers.md): output behavior, standalone
   installation, and package publishing.

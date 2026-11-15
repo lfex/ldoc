@@ -58,8 +58,9 @@ main_result(Result) ->
             io:put_chars("ldoc build PROJECT --output FRESH_ROOT [OPTIONS]\n"
                          "ldoc --help | help\n"
                          "OPTIONS: --overview FILE --namespace TEXT "
-                         "--package TEXT --source-root ROOT "
-                         "--source-base URL\n"),
+                         "--overview-path LOGICAL.md --page PATH "
+                         "[--page PATH ...] --package TEXT "
+                         "--source-root ROOT --source-base URL\n"),
             halt(0);
         {ok, Index} ->
             io:put_chars([Index, <<"\n">>]),
@@ -80,7 +81,10 @@ main_result(Result) ->
 Run one command without halting the caller.
 
 Accepts proper Unicode character-list arguments for `--help` or `build PROJECT
---output FRESH_ROOT` and its optional settings. Success is `{ok, help}` or
+--output FRESH_ROOT` and its optional settings. `--page PATH` may be repeated;
+its ordered values replace the literal configured pages list. `--overview-path`
+supplies the logical identity for an overview outside the project when pages
+mode is active. Success is `{ok, help}` or
 `{ok, IndexBinary}` containing the absolute `site/index.html` path; expected
 failures return `{error, Reason}`. A build starts ldoc's required applications,
 reconciles the flat default-profile source/app/BEAM inventory, and compiles
@@ -147,11 +151,18 @@ parse_options([], Opts, []) ->
 parse_options([], _Opts, [Flag | _]) -> {error, {missing_value, Flag}};
 parse_options([Flag], _Opts, [])
   when Flag =:= "--output"; Flag =:= "--overview"; Flag =:= "--namespace";
+       Flag =:= "--overview-path"; Flag =:= "--page";
        Flag =:= "--package"; Flag =:= "--source-root"; Flag =:= "--source-base" ->
     {error, {missing_value, Flag}};
+parse_options(["--page", Value | Rest], Opts, _Pending) ->
+    case Value =/= "" andalso not lists:prefix("--", Value) of
+        true -> parse_options(Rest, Opts#{pages => maps:get(pages, Opts, []) ++ [Value]}, []);
+        false -> {error, {empty_value, "--page"}}
+    end;
 parse_options([Flag, Value | Rest], Opts, _Pending)
   when Flag =:= "--output"; Flag =:= "--overview"; Flag =:= "--namespace";
-       Flag =:= "--package"; Flag =:= "--source-root"; Flag =:= "--source-base" ->
+       Flag =:= "--overview-path"; Flag =:= "--package";
+       Flag =:= "--source-root"; Flag =:= "--source-base" ->
     Key = option_key(Flag),
     case {Value =/= "" andalso not lists:prefix("--", Value), maps:is_key(Key, Opts)} of
         {false, _} -> {error, {empty_value, Flag}};
@@ -163,6 +174,7 @@ parse_options([Flag | _], _Opts, _Pending) when is_list(Flag) ->
 
 option_key("--output") -> output;
 option_key("--overview") -> overview;
+option_key("--overview-path") -> overview_path;
 option_key("--namespace") -> namespace;
 option_key("--package") -> package;
 option_key("--source-root") -> source_root;
@@ -258,14 +270,23 @@ validate_overview_path(Project, Opts, Sources, AppSrc) ->
             Namespace = maps:get(namespace, Opts, "local"),
             SourceRoot = maps:get(source_root, Opts, undefined),
             SourceBase = maps:get(source_base, Opts, undefined),
-            RenderOpts = render_options(Bytes0, SourceBase),
-            case 'ldoc-html':'valid-options?'(RenderOpts) andalso valid_source_root(SourceRoot) of
-                true -> {ok, Sources, App, Bytes0,
-                         #{namespace => Namespace,
-                           package_override => maps:get(package, Opts, undefined)},
-                         #{source_root => source_root_abs(SourceRoot, filename:absname(".")),
-                           source_base => optional_binary(SourceBase)}};
-                false -> {error, invalid_source_or_render_options}
+            Adapter = ldoc_project_pages:load(
+                        Project, maps:get(pages, Opts, absent), OverviewPath,
+                        maps:get(overview_path, Opts, undefined)),
+            case Adapter of
+                {error, _} = Error -> Error;
+                {ok, PageOptions} ->
+                    RenderOpts = maps:merge(render_options(Bytes0, SourceBase), PageOptions),
+                    case 'ldoc-html':'valid-options?'(RenderOpts) andalso valid_source_root(SourceRoot) of
+                        true -> {ok, Sources, App, Bytes0,
+                                 #{namespace => Namespace,
+                                   package_override => maps:get(package, Opts, undefined)},
+                                 #{source_root => source_root_abs(SourceRoot, filename:absname(".")),
+                                   source_base => optional_binary(SourceBase),
+                                   pages => maps:get(pages, PageOptions, undefined),
+                                   overview_path => maps:get(overview_path, PageOptions, undefined)}};
+                        false -> {error, invalid_source_or_render_options}
+                    end
             end;
         {{error, Reason}, _} -> {error, Reason};
         {_, {error, Reason}} -> {error, Reason}
@@ -587,7 +608,9 @@ publish_site(Output, Release, Overview, SiteOptions, Docset) ->
                 ok ->
                     Spec0 = #{release => Release, overview => Overview},
                     Spec1 = optional_map(source_root, maps:get(source_root, SiteOptions), Spec0),
-                    Spec = optional_map(source_base, maps:get(source_base, SiteOptions), Spec1),
+                    Spec2 = optional_map(source_base, maps:get(source_base, SiteOptions), Spec1),
+                    Spec3 = optional_map(pages, maps:get(pages, SiteOptions), Spec2),
+                    Spec = optional_map(overview_path, maps:get(overview_path, SiteOptions), Spec3),
                     Site = filename:join(Output, "site"),
                     case 'ldoc-site':build(Snapshots, [Spec], Site) of
                         {ok, Index} -> {ok, Index};

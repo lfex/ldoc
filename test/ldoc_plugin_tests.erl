@@ -26,9 +26,14 @@ real_provider_generation() ->
         ok = make_plugin_source(Git, SourceRoot, PluginSource),
         Plugin = "{ldoc, {git, \"file://" ++ PluginSource ++
                  "\", {branch, \"main\"}}}",
-        Config = "{project_plugins, [" ++ Plugin ++ "]}.\n",
+        Config = "{project_plugins, [" ++ Plugin ++ "]}.\n" ++
+                 "{ldoc, [{pages, [\"docs/info.md\"]}]} .\n",
         ok = file:write_file(filename:join(Root, "rebar.config"), Config),
         create_consumer(Root, "Initial provider documentation."),
+        Docs = filename:join(Root, "docs"),
+        ok = file:make_dir(Docs),
+        Info = filename:join(Docs, "info.md"),
+        ok = file:write_file(Info, <<"# Project notes\n\nInitial selected page.\n">>),
         {ok, Help} = command(Rebar, ["help", "ldoc"], Root),
         ?assertNotEqual(nomatch, binary:match(Help, <<"--source-base">>)),
         {ok, FirstOutput} = command(Rebar, ["ldoc"], Root),
@@ -39,18 +44,50 @@ real_provider_generation() ->
         ?assertNotEqual(nomatch, binary:match(FirstOutput, <<"current/site/index.html">>)),
         FirstTree = tree(FirstRef),
         ?assert(site_contains(FirstRef, <<"Initial provider documentation">>)),
+        ?assert(site_contains(FirstRef, <<"Initial selected page">>)),
         nonregular_generation_marker_is_refused(Rebar, Root, Container,
                                                 Current, FirstTarget, FirstRef, FirstTree),
         create_consumer(Root, "Updated provider documentation with additional words."),
+        ok = file:write_file(Info, <<"# Project notes\n\nUpdated selected page.\n">>),
         {ok, _} = command(Rebar, ["ldoc"], Root),
         {ok, SecondTarget} = file:read_link(Current),
         ?assertNotEqual(FirstTarget, SecondTarget),
         ?assertEqual(FirstTree, tree(FirstRef)),
         SecondRef = filename:join([Container, SecondTarget]),
         ?assert(site_contains(SecondRef, <<"Updated provider documentation">>)),
+        ?assert(site_contains(SecondRef, <<"Updated selected page">>)),
+        SecondTree = tree(SecondRef),
+        Sibling = filename:join(Container, "unrelated.keep"),
+        ok = file:write_file(Sibling, <<"sibling bytes">>),
+        ok = file:write_file(Info, <<"# Project notes\n\n[Broken](missing.md).\n">>),
+        {error, {Status, LinkFailure}} = command(Rebar, ["ldoc"], Root),
+        ?assert(Status =/= 0),
+        ?assertNotEqual(nomatch, binary:match(LinkFailure, <<"documentation_link">>)),
+        ?assertEqual({ok, SecondTarget}, file:read_link(Current)),
+        ?assertEqual(SecondTree, tree(SecondRef)),
+        ?assertEqual({ok, <<"sibling bytes">>}, file:read_file(Sibling)),
+        ok = file:write_file(Info, <<"# Project notes\n\nUpdated selected page.\n">>),
         ExplicitOutput = filename:join(Workspace, "explicit-output"),
         {ok, _} = command(Rebar, ["ldoc", "--output", ExplicitOutput], Root),
         ?assert(filelib:is_regular(filename:join([ExplicitOutput, "site", "index.html"]))),
+        OverrideA = filename:join(Docs, "override-a.md"),
+        OverrideB = filename:join(Docs, "override-b.md"),
+        ok = file:write_file(OverrideA, <<"# Override A\n\nFirst override page.\n">>),
+        ok = file:write_file(OverrideB, <<"# Override B\n\nSecond override page.\n">>),
+        RepeatedOutput = filename:join(Workspace, "repeated-pages-output"),
+        {ok, _} = command(Rebar, ["ldoc", "--output", RepeatedOutput,
+            "--page", "docs/override-b.md", "--page", "docs/override-a.md"], Root),
+        RepeatedSite = tree(filename:join(RepeatedOutput, "site")),
+        RepeatedPageRoute = binary_to_list('ldoc-pages':route(<<"docs/override-b.md">>)),
+        [{_RepeatedPagePath, RepeatedPageHtml} | _] = [Entry || Entry = {Name, Bytes} <-
+            RepeatedSite, is_binary(Bytes), filename:basename(Name) =:= RepeatedPageRoute],
+        RepeatedHtml = iolist_to_binary([Bytes || {_Name, Bytes} <- RepeatedSite,
+                                                  is_binary(Bytes)]),
+        ?assert(binary:match(RepeatedHtml, <<"First override page">>) =/= nomatch),
+        ?assert(binary:match(RepeatedHtml, <<"Second override page">>) =/= nomatch),
+        {OverrideFirst, _} = binary:match(RepeatedPageHtml, <<"Override B">>),
+        {OverrideSecond, _} = binary:match(RepeatedPageHtml, <<"Override A">>),
+        ?assert(OverrideFirst < OverrideSecond),
         ?assertMatch({error, _}, command(Rebar, ["ldoc", "--output", ExplicitOutput], Root)),
         {ok, GenerationBeforeFailure} = file:read_link(Current),
         GoodTree = tree(filename:join([Container, GenerationBeforeFailure])),
@@ -75,7 +112,8 @@ real_provider_generation() ->
         invalid_current_is_preserved(Rebar, Root, Workspace, Current),
         unowned_container_is_preserved(Rebar, Root),
         symlink_container_is_preserved(Rebar, Root),
-        symlink_build_ancestor_is_refused(Rebar, Root, Workspace)
+        symlink_build_ancestor_is_refused(Rebar, Root, Workspace),
+        lfe_project_plugin_consumer(Rebar, Workspace, PluginSource)
     after
         remove_tree(Workspace)
     end.
@@ -90,6 +128,43 @@ create_consumer(Root, FunctionDoc) ->
         "-module(plugin_fixture).\n-moduledoc \"Plugin fixture module.\".\n",
         "-export([answer/0]).\n-doc \"", FunctionDoc, "\".\nanswer() -> 42.\n"])),
     bump_mtime(Source).
+
+lfe_project_plugin_consumer(Rebar, Workspace, PluginSource) ->
+    Root = filename:join(Workspace, "lfe-consumer"),
+    Source = filename:join([Root, "src", "plugin_lfe_fixture.lfe"]),
+    Docs = filename:join(Root, "docs"),
+    ok = filelib:ensure_dir(Source),
+    ok = file:make_dir(Docs),
+    Config = "{deps, [{lfe, \"2.2.2\"}]}.\n" ++
+             "{plugins, [{rebar3_lfe, \"0.5.8\"}]} .\n" ++
+             "{project_plugins, [{ldoc, {git, \"file://" ++ PluginSource ++
+             "\", {branch, \"main\"}}}]} .\n" ++
+             "{ldoc, [{pages, [\"docs/lfe-guide.md\"]}]} .\n",
+    ok = file:write_file(filename:join(Root, "rebar.config"), Config),
+    ok = file:write_file(filename:join([Root, "src", "plugin_lfe_fixture.app.src"]),
+        <<"{application, plugin_lfe_fixture, [{description, \"LFE fixture\"}, "
+          "{vsn, \"1.0.0\"}, {applications, [kernel, stdlib]}, "
+          "{modules, [plugin_lfe_fixture]}]}.\n">>),
+    ok = file:write_file(Source,
+        <<"(defmodule plugin_lfe_fixture\n"
+          "  \"LFE fixture module documentation.\"\n"
+          "  (export (answer 0)))\n"
+          "(defun answer () \"Return the LFE fixture value.\" 42)\n">>),
+    ok = file:write_file(filename:join(Docs, "lfe-guide.md"),
+                         <<"# LFE project guide\n\nSelected LFE documentation page.\n">>),
+    {ok, Help} = command(Rebar, ["help", "ldoc"], Root),
+    ?assertNotEqual(nomatch, binary:match(Help, <<"--page">>)),
+    {ok, _} = command(Rebar, ["ldoc"], Root),
+    Current = filename:join([Root, "_build", "default", "ldoc", "current"]),
+    {ok, Target} = file:read_link(Current),
+    Reference = filename:join([filename:dirname(Current), Target]),
+    ?assert(site_contains(Reference, <<"LFE fixture module documentation">>)),
+    ?assert(site_contains(Reference, <<"Selected LFE documentation page">>)),
+    {ok, [{application, plugin_lfe_fixture, AppProps}]} =
+        file:consult(filename:join([Root, "_build", "default", "lib",
+                                    "plugin_lfe_fixture", "ebin",
+                                    "plugin_lfe_fixture.app"])),
+    ?assertNot(lists:member(ldoc, proplists:get_value(applications, AppProps))).
 
 stale_lock_is_preserved(Rebar, Root, Container, Current, ExpectedTarget) ->
     Lock = filename:join(Container, ".ldoc-lock"),

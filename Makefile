@@ -41,6 +41,7 @@ docs: cli
 	  docs_work="$$(mktemp -d "$(DOCS_PARENT)/docs.XXXXXXXX")"; \
 	  "$(DOCGEN)" build "$(CURDIR)" --output "$$docs_work/reference" \
 	    --overview "$(CURDIR)/docs/overview.md" \
+	    --overview-path "docs/overview.md" \
 	    --namespace hexpm --package ldoc
 
 publish: cli
@@ -50,5 +51,6 @@ publish: cli
 	  trap 'rm -rf -- "$$publish_work"' EXIT; \
 	  "$(DOCGEN)" build "$(CURDIR)" --output "$$publish_work/reference" \
 	    --overview "$(CURDIR)/docs/overview.md" \
+	    --overview-path "docs/overview.md" \
 	    --namespace hexpm --package ldoc; \
 	  "$(REBAR3)" hex publish --doc-dir "$$publish_work/reference/site" $(PUBLISH_FLAGS)

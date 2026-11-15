@@ -23,6 +23,8 @@ init(State) ->
         {desc, "Builds the current flat default-profile project and refreshes the ldoc reference."},
         {opts, [{output, $o, "output", string, "Fresh explicit output root"},
                 {overview, undefined, "overview", string, "Overview Markdown file"},
+                {overview_path, undefined, "overview-path", string, "Overview logical identity"},
+                {page, undefined, "page", string, "Selected project Markdown page (repeatable)"},
                 {namespace, undefined, "namespace", string, "Release namespace"},
                 {package, undefined, "package", string, "Package label"},
                 {source_root, undefined, "source-root", string, "Source link root"},
@@ -76,20 +78,27 @@ report_success(State, Index) ->
 
 provider_options({[help], []}) -> {error, help_requested};
 provider_options({Options, []}) when is_list(Options) ->
-    try {ok, maps:fold(fun
-        (output, Value, Acc) -> put_option("--output", Value, Acc);
-        (overview, Value, Acc) -> put_option("--overview", Value, Acc);
-        (namespace, Value, Acc) -> put_option("--namespace", Value, Acc);
-        (package, Value, Acc) -> put_option("--package", Value, Acc);
-        (source_root, Value, Acc) -> put_option("--source-root", Value, Acc);
-        (source_base, Value, Acc) -> put_option("--source-base", Value, Acc);
-        (Key, _Value, _Acc) -> throw({unsupported_option, Key})
-    end, #{}, maps:from_list(Options))}
+    try {ok, lists:foldl(fun provider_option/2, #{}, Options)}
     catch throw:Reason -> {error, Reason}; error:Reason -> {error, {invalid_options, Reason}}
     end;
 provider_options({_Options, Positionals}) when is_list(Positionals), Positionals =/= [] ->
     {error, {unexpected_arguments, Positionals}};
 provider_options(Args) -> {error, {invalid_options, Args}}.
+
+provider_option({output, Value}, Acc) -> put_option("--output", Value, Acc);
+provider_option({overview, Value}, Acc) -> put_option("--overview", Value, Acc);
+provider_option({overview_path, Value}, Acc) -> put_option("--overview-path", Value, Acc);
+provider_option({page, Value}, Acc) -> put_page(Value, Acc);
+provider_option({namespace, Value}, Acc) -> put_option("--namespace", Value, Acc);
+provider_option({package, Value}, Acc) -> put_option("--package", Value, Acc);
+provider_option({source_root, Value}, Acc) -> put_option("--source-root", Value, Acc);
+provider_option({source_base, Value}, Acc) -> put_option("--source-base", Value, Acc);
+provider_option({Key, _Value}, _Acc) -> throw({unsupported_option, Key});
+provider_option(Other, _Acc) -> throw({invalid_option, Other}).
+
+put_page(Value, Acc) when is_list(Value), Value =/= [] ->
+    Acc#{pages => maps:get(pages, Acc, []) ++ [Value]};
+put_page(Value, _Acc) -> throw({invalid_option_value, "--page", Value}).
 
 put_option(Flag, Value, Acc) when is_list(Value), Value =/= [] ->
     Key = option_key(Flag),
@@ -101,6 +110,7 @@ put_option(Flag, Value, _Acc) -> throw({invalid_option_value, Flag, Value}).
 
 option_key("--output") -> output;
 option_key("--overview") -> overview;
+option_key("--overview-path") -> overview_path;
 option_key("--namespace") -> namespace;
 option_key("--package") -> package;
 option_key("--source-root") -> source_root;
@@ -110,11 +120,14 @@ build_args(Root, Output, Options) ->
     ["build", Root, "--output", Output] ++ option_args(maps:remove(output, Options)).
 
 option_args(Options) ->
-    lists:append([[option_flag(Key), maps:get(Key, Options)]
-                  || Key <- [overview, namespace, package, source_root, source_base],
-                     maps:is_key(Key, Options)]).
+    Single = lists:append([[option_flag(Key), maps:get(Key, Options)]
+                           || Key <- [overview, overview_path, namespace, package,
+                                      source_root, source_base],
+                              maps:is_key(Key, Options)]),
+    Single ++ lists:append([["--page", Path] || Path <- maps:get(pages, Options, [])]).
 
 option_flag(overview) -> "--overview";
+option_flag(overview_path) -> "--overview-path";
 option_flag(namespace) -> "--namespace";
 option_flag(package) -> "--package";
 option_flag(source_root) -> "--source-root";

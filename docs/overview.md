@@ -5,6 +5,10 @@ documentation from trusted Erlang and LFE BEAM files, stores a readable
 snapshot, selects a presentation view, and renders a local static HTML
 reference. The output is useful offline and does not require a hosted service.
 
+Read the [user guide](guide.md) for project configuration and page selection,
+or the [maintainer guide](maintainers.md) for local docs builds and package
+checks.
+
 ## Build a project reference
 
 For an Erlang project, configure ldoc as a development-only plugin:

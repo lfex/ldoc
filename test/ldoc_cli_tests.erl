@@ -8,6 +8,7 @@ ldoc_cli_test_() ->
         with_workspace(fun(Workspace, SiblingSentinel) ->
             help_and_usage(Workspace),
             prebuild_rejections(Workspace),
+            project_pages_ingestion(Workspace),
             guide_example_round_trip(Workspace),
             two_carrier_cli_build(Workspace),
             package_label_containment(Workspace),
@@ -425,6 +426,145 @@ assert_header_choice(Output, Root, Expected, Rejected, ExpectedType, Prose) ->
     ?assertEqual(BuildLibs, lists:last(IncludePaths)),
     ok.
 
+project_pages_ingestion(Workspace) ->
+    Root = filename:join(Workspace, "project-pages-fixture"),
+    Output = filename:join(Workspace, "project-pages-output"),
+    Override = filename:join(Workspace, "project-pages-override"),
+    OutsideOverview = filename:join(Workspace, "external-overview.md"),
+    create_project(Root),
+    Docs = filename:join(Root, "docs"),
+    ok = file:make_dir(Docs),
+    A = filename:join(Docs, "a.md"),
+    B = filename:join(Docs, "b.md"),
+    ok = file:write_file(A, <<"# Alpha page\n\nConfigured body.\n">>),
+    ok = file:write_file(B, <<"# Beta page\n\nSecond configured body.\n">>),
+    Config = <<"{erl_opts, [debug_info, {i, \"include\"}, {d, edoc_enabled, true}]} .\n",
+               "{ldoc, [{pages, [\"docs/a.md\", {\"docs/b.md\", \"Second page\"}]}]}.\n">>,
+    ok = file:write_file(filename:join(Root, "rebar.config"), Config),
+    {ok, Index} = ldoc_cli:run(["build", Root, "--output", Output]),
+    _ = read_file(binary_to_list(Index)),
+    AllSite = iolist_to_binary([Bytes || {_Name, Bytes} <- read_tree(filename:join(Output, "site"))]),
+    ?assert(binary:match(AllSite, <<"Configured body">>) =/= nomatch),
+    ?assert(binary:match(AllSite, <<"Second configured body">>) =/= nomatch),
+    ConfiguredPage = site_route_bytes(Output, "docs/a.md"),
+    {FirstLabel, _} = binary:match(ConfiguredPage, <<"Alpha page">>),
+    {SecondLabel, _} = binary:match(ConfiguredPage, <<"Second page">>),
+    ?assert(FirstLabel < SecondLabel),
+
+    {ok, OverrideIndex} = ldoc_cli:run(["build", Root, "--output", Override,
+        "--page", "docs/b.md", "--page", "docs/a.md"]),
+    _ = read_file(binary_to_list(OverrideIndex)),
+    OverridePage = site_route_bytes(Override, "docs/b.md"),
+    {OverrideFirst, _} = binary:match(OverridePage, <<"Beta page">>),
+    {OverrideSecond, _} = binary:match(OverridePage, <<"Alpha page">>),
+    ?assert(OverrideFirst < OverrideSecond),
+
+    ok = file:write_file(filename:join(Root, "rebar.config"),
+        <<"{erl_opts, [debug_info, {i, \"include\"}, {d, edoc_enabled, true}]} .\n",
+          "{ldoc, [{pages, [\"docs/missing-unused.md\"]}]} .\n">>),
+    UnusedOutput = filename:join(Workspace, "project-pages-unused-config"),
+    {ok, UnusedIndex} = ldoc_cli:run(["build", Root, "--output", UnusedOutput,
+                                      "--page", "docs/a.md"]),
+    ?assert(filelib:is_regular(UnusedIndex)),
+    ok = file:write_file(filename:join(Root, "rebar.config"), Config),
+
+    ok = file:write_file(OutsideOverview, <<"# External overview\n">>),
+    AliasOutput = filename:join(Workspace, "project-pages-alias"),
+    {ok, AliasIndex} = ldoc_cli:run(["build", Root, "--output", AliasOutput,
+        "--overview", OutsideOverview, "--overview-path", "overview/alias.md",
+        "--page", "docs/a.md"]),
+    ?assert(filelib:is_regular(AliasIndex)),
+    CollisionOutput = filename:join(Workspace, "project-pages-collision"),
+    ?assertMatch({error, {documentation_pages, {input, "docs/a.md", invalid_page_metadata}}},
+        ldoc_cli:run(["build", Root, "--output", CollisionOutput,
+            "--overview", OutsideOverview, "--overview-path", "docs/a.md",
+            "--page", "docs/a.md"])),
+    ?assertNot(filelib:is_dir(CollisionOutput)),
+
+    Symlink = filename:join(Docs, "linked.md"),
+    ok = file:make_symlink(A, Symlink),
+    SymlinkOutput = filename:join(Workspace, "project-pages-symlink"),
+    ?assertMatch({error, {documentation_pages, {input, _, {unsafe_component, symlink}}}},
+        ldoc_cli:run(["build", Root, "--output", SymlinkOutput,
+                      "--page", "docs/linked.md"])),
+    UnicodePath = "docs/caf" ++ [16#e9] ++ " space.md",
+    UnicodeFile = filename:join(Root, UnicodePath),
+    ok = file:write_file(UnicodeFile, <<"# Unicode filename\n\nRaw physical path.\n">>),
+    {ok, UnicodeOptions} = ldoc_project_pages:load(
+        Root, [UnicodePath], filename:join(Root, "README.md"), undefined),
+    [UnicodePage] = maps:get(pages, UnicodeOptions),
+    ?assertEqual(unicode:characters_to_binary(UnicodePath), maps:get(path, UnicodePage)),
+    ?assertEqual(<<"# Unicode filename\n\nRaw physical path.\n">>,
+                 maps:get(body, UnicodePage)),
+    DecomposedPath = "docs/caf" ++ "e" ++ [16#301] ++ " space.md",
+    ok = file:write_file(filename:join(Root, DecomposedPath),
+                         <<"# Decomposed filename\n\nRaw NFD input.\n">>),
+    {ok, NFDOptions} = ldoc_project_pages:load(
+        Root, [DecomposedPath], filename:join(Root, "README.md"), undefined),
+    [NFDPage] = maps:get(pages, NFDOptions),
+    ?assertEqual(<<"# Decomposed filename\n\nRaw NFD input.\n">>,
+                 maps:get(body, NFDPage)),
+    ?assertMatch({error, {documentation_pages, {input, UnicodePath, invalid_page_metadata}}},
+        ldoc_project_pages:load(Root, [UnicodePath, DecomposedPath],
+                                filename:join(Root, "README.md"), undefined)),
+    Fifo = filename:join(Docs, "input.md"),
+    Mkfifo = os:find_executable("mkfifo"),
+    ?assert(Mkfifo =/= false),
+    FifoPort = open_port({spawn_executable, Mkfifo},
+                         [exit_status, use_stdio, stderr_to_stdout, {args, [Fifo]}]),
+    receive {FifoPort, {exit_status, 0}} -> ok after 2000 -> ?assert(false) end,
+    ?assertMatch({error, {documentation_pages,
+                         {input, Fifo, {unsafe_component, _}}}},
+                 bounded_page_load(Root, "docs/input.md")),
+    OutsideNoAlias = filename:join(Workspace, "outside-no-alias"),
+    ?assertMatch({error, {documentation_pages,
+                         {overview, OutsideOverview, outside_project_requires_alias}}},
+        ldoc_cli:run(["build", Root, "--output", OutsideNoAlias,
+                      "--overview", OutsideOverview, "--page", "docs/a.md"])),
+    MissingOutput = filename:join(Workspace, "project-pages-missing"),
+    ?assertMatch({error, {documentation_pages, {input, _, {inspect, enoent}}}},
+        ldoc_cli:run(["build", Root, "--output", MissingOutput,
+                      "--page", "docs/missing.md"])),
+    InvalidUtf8 = filename:join(Docs, "invalid.md"),
+    ok = file:write_file(InvalidUtf8, <<255, 254>>),
+    ?assertEqual({error, {documentation_pages, {input, "docs/invalid.md", invalid_utf8}}},
+        ldoc_project_pages:load(Root, ["docs/invalid.md"],
+                                filename:join(Root, "README.md"), undefined)),
+
+    InvalidConfigOutput = filename:join(Workspace, "project-pages-invalid-config"),
+    ok = file:write_file(filename:join(Root, "rebar.config"),
+       <<"{erl_opts, [debug_info, {i, \"include\"}, {d, edoc_enabled, true}]} .\n",
+         "{ldoc, [{pages, [\"docs/missing-unused.md\"]}, {unsupported, true}]} .\n">>),
+    ?assertMatch({error, {documentation_pages, {config, _, {unknown_option, unsupported}}}},
+        ldoc_cli:run(["build", Root, "--output", InvalidConfigOutput,
+                      "--page", "docs/a.md"])),
+    ?assertNot(filelib:is_dir(InvalidConfigOutput)),
+    BareLdocOutput = filename:join(Workspace, "project-pages-bare-ldoc"),
+    ok = file:write_file(filename:join(Root, "rebar.config"),
+        <<"{erl_opts, [debug_info, {i, \"include\"}, {d, edoc_enabled, true}]} .\n",
+          "ldoc.\n">>),
+    ?assertMatch({error, {documentation_pages,
+                         {config, _, invalid_ldoc_config}}},
+        ldoc_cli:run(["build", Root, "--output", BareLdocOutput,
+                      "--page", "docs/a.md"])),
+    ?assertNot(filelib:is_dir(BareLdocOutput)).
+
+bounded_page_load(Root, Path) ->
+    Parent = self(),
+    {Pid, Ref} = spawn_monitor(fun() ->
+        Parent ! {page_load_result, self(), ldoc_project_pages:load(
+            Root, [Path], filename:join(Root, "README.md"), undefined)}
+    end),
+    receive
+        {page_load_result, Pid, Result} ->
+            receive {'DOWN', Ref, process, Pid, normal} -> Result end;
+        {'DOWN', Ref, process, Pid, Reason} -> {error, {worker_down, Reason}}
+    after 1500 ->
+        exit(Pid, kill),
+        receive {'DOWN', Ref, process, Pid, _} -> ok end,
+        {error, timeout}
+    end.
+
 fixture_spec_return(Forms, Name) ->
     [SpecForms] = [Types ||
                       {attribute, _, spec, {{SpecName, 0}, Types}} <- Forms,
@@ -547,7 +687,7 @@ assert_cli_public_docs() ->
                                   'ldoc-html-assets', 'ldoc-legacy',
                                   'ldoc-markup', 'ldoc-site', 'ldoc-store',
                                   'ldoc-pages',
-                                  ldoc, ldoc_cli, ldoc_prv]),
+                                  ldoc, ldoc_cli, ldoc_prv, ldoc_project_pages]),
     ?assertEqual(ExpectedModules, lists:sort(AppModules)),
     ExpectedFunctions = lists:sort([
         {'ldoc-beam', 'read-docs', 1}, {'ldoc-beam', collect, 1},
@@ -569,7 +709,7 @@ assert_cli_public_docs() ->
         {ldoc, init, 1},
         {ldoc_cli, main, 1}, {ldoc_cli, run, 1}, {ldoc_cli, run, 2},
         {ldoc_prv, init, 1}, {ldoc_prv, do, 1},
-        {ldoc_prv, format_error, 1}]),
+        {ldoc_prv, format_error, 1}, {ldoc_project_pages, load, 4}]),
     ExpectedGenerated = lists:sort(lists:append([
         case Module of
             ldoc_cli -> [{ldoc_cli, module_info, 0},
@@ -577,6 +717,8 @@ assert_cli_public_docs() ->
             ldoc -> [{ldoc, module_info, 0}, {ldoc, module_info, 1}];
             ldoc_prv -> [{ldoc_prv, module_info, 0},
                          {ldoc_prv, module_info, 1}];
+            ldoc_project_pages -> [{ldoc_project_pages, module_info, 0},
+                                   {ldoc_project_pages, module_info, 1}];
             _ -> [{Module, module_info, 0}, {Module, module_info, 1},
                   {Module, '__info__', 1},
                   {Module, 'LFE-EXPAND-EXPORTED-MACRO', 3}]
@@ -615,7 +757,7 @@ assert_cli_public_docs() ->
                      not lists:member(Identity, ExpectedGenerated)]
     end || Module <- ExpectedModules]),
     ?assertEqual(ExpectedFunctions, lists:sort(ActualFunctions)),
-    ?assertEqual(54, length(ExpectedGenerated)).
+    ?assertEqual(56, length(ExpectedGenerated)).
 
 nonempty_english_doc(Doc) when is_map(Doc) ->
     case maps:get(<<"en">>, Doc, <<>>) of
@@ -731,6 +873,13 @@ tree_entry(Root, Relative, Name) ->
         false -> [{Child, read_file(Path)}]
     end.
 read_file(Path) -> {ok, Bytes} = file:read_file(Path), Bytes.
+
+site_route_bytes(Output, LogicalPath) ->
+    Route = binary_to_list('ldoc-pages':route(unicode:characters_to_binary(LogicalPath))),
+    [{_Path, Bytes} | _] = [{Path, Content} || {Path, Content} <-
+        read_tree(filename:join(Output, "site")),
+        filename:basename(Path) =:= Route],
+    Bytes.
 
 normalize_snapshot(Docset, Output) ->
     Modules = [Module#{source := normalize_source(maps:get(source, Module), Output)}

@@ -29,6 +29,13 @@ make install PREFIX="$HOME/.local"
 
 ## Maintainer package and docs checks
 
+The ordinary `{ldoc, [{pages, [...]}]}` configuration in the checkout selects
+`docs/guide.md` followed by `docs/maintainers.md`. Both `make docs` and the
+preparation stage of `make publish` use that same selection and identify
+`docs/overview.md` explicitly as the overview source. Change the shared
+configuration when adjusting the maintained reference; do not maintain a
+separate page list in the Make recipes.
+
 From a source checkout, the maintained reference and combined Hex provider
 flow are:
 
