@@ -3,20 +3,15 @@
 [![Build Status][gh-actions-badge]][gh-actions]
 [![LFE Version][lfe-badge]][lfe]
 [![Erlang/OTP Versions][erlang-badge]][versions]
-[![Hex Version][hex-badge]][hex-package]
 [![Tags][github-tags-badge]][github-tags]
 [![Downloads][hex-downloads]][hex-package]
 [![HexDocs][hex-docs-badge]][hex-docs]
 
-This source builds ldoc 0.1.1, which collects API documentation for Erlang,
-modern LFE, and classic LFE from trusted local BEAM artifacts. It assembles
-native snapshots and renders a static HTML reference.
+[![][logo]][logo-large]
 
-<p align="center">
-  <a href="priv/images/ldoc-liffybot.png">
-    <img src="priv/images/ldoc-liffybot.png" width="440" alt="LiffyBot, red LED alight, reading beneath an autumn tree and lantern with an Erlang mug beside him, rendered as a hand-coloured linocut.">
-  </a>
-</p>
+*An LFE port of Clojure's cljdoc*
+
+ldoc turns the documentation in Erlang and LFE projects into an easy-to-browse website. It brings API references, guides, and other project pages together, helping people find what they need, understand how a library works, and get started using it.
 
 ## Build a project reference with Rebar3
 
@@ -57,13 +52,17 @@ setting in `rebar.config`; see the [page selection guide](docs/guide.md#select-p
 
 ldoc is released under the [Apache License, Version 2.0](LICENSE).
 
-The AI-generated project image features LiffyBot, the LFE mascot, and was
+The project image featuring LiffyBot (the LFE mascot) was
 inspired by [Andrea Wisnewski's linocut prints](https://runningrabbit.biz/linocut-prints/).
 
+[//]: ---Named-Links---
+
+[logo-large]: priv/images/ldoc-liffybot.png
+[logo]: priv/images/ldoc-liffybot-y250.png
 [gh-actions-badge]: https://github.com/lfex/ldoc/actions/workflows/cicd.yml/badge.svg?branch=main
 [gh-actions]: https://github.com/lfex/ldoc/actions/workflows/cicd.yml?query=branch%3Amain
 [lfe]: https://github.com/lfe/lfe
-[lfe-badge]: https://img.shields.io/badge/LFE-2.2.2-blue.svg
+[lfe-badge]: https://img.shields.io/badge/LFE-2.2+-blue.svg
 [versions]: https://github.com/lfex/ldoc/blob/main/.github/workflows/cicd.yml
 [erlang-badge]: https://img.shields.io/badge/Erlang%2FOTP-27%E2%80%9329-blue.svg
 [hex-package]: https://hex.pm/packages/ldoc
