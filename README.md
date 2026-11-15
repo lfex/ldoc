@@ -57,8 +57,10 @@ inspired by [Andrea Wisnewski's linocut prints](https://runningrabbit.biz/linocu
 
 [//]: ---Named-Links---
 
-[logo-large]: priv/images/ldoc-liffybot.png
-[logo]: priv/images/ldoc-liffybot-y250.png
+[logo-large-rel]: priv/images/ldoc-liffybot.png
+[logo-rel]: priv/images/ldoc-liffybot-y250.png
+[logo-large]: https://raw.githubusercontent.com/lfex/ldoc/refs/heads/main/priv/images/ldoc-liffybot.png
+[logo]: https://raw.githubusercontent.com/lfex/ldoc/refs/heads/main/priv/images/ldoc-liffybot-y250.png
 [gh-actions-badge]: https://github.com/lfex/ldoc/actions/workflows/cicd.yml/badge.svg?branch=main
 [gh-actions]: https://github.com/lfex/ldoc/actions/workflows/cicd.yml?query=branch%3Amain
 [lfe]: https://github.com/lfe/lfe
