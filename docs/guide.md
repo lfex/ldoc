@@ -12,7 +12,7 @@ Contents
 - [Build a versioned local site](#build-a-versioned-local-site)
 - [Generate an EEP-48 sidecar with EDoc](#generate-an-eep-48-sidecar-with-edoc)
 - [Collect classic LFE documentation](#collect-classic-lfe-documentation)
-  - [Reproduce the classic fixture](#reproduce-the-classic-fixture)
+- [Reproduce the classic fixture](#reproduce-the-classic-fixture)
 
 ## Overview
 
@@ -283,6 +283,8 @@ rebar3 ldoc --page docs/setup.md --page docs/reference.md
 "$HOME/.local/bin/ldoc" build "$PWD" --output "$PWD/reference" \
   --page docs/setup.md --page docs/reference.md
 ```
+
+Every local `.md` target must be the overview or part of the selected pages; unselected targets fail with `unknown_page`.
 
 Page files must be ordinary regular files reached through ordinary directories
 beneath the project root. Symlinks, missing files, FIFOs and other special
