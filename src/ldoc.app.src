@@ -1,6 +1,6 @@
 {application, ldoc,
  [{description, "Collect native Erlang and LFE documentation into snapshots and static references"},
-  {vsn, "0.1.1"},
+  {vsn, "0.1.2"},
   {registered, []},
   {applications, [kernel, stdlib, lfe, crypto]},
   {licenses, ["Apache-2.0"]},
